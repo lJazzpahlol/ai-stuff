@@ -1,0 +1,1077 @@
+using System.Linq;
+using System.Diagnostics;
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using AimsharpWow.API; //needed to access Aimsharp API
+
+namespace AimsharpWow.Modules
+{
+    public class ClassicSoDWarrior: Rotation
+    {
+//spellnames
+List<string> SpellsList = new List<string>
+{
+    "Battle Shout", "Charge", "Rend", "Thunder Clap", "Overpower",
+    "Mocking Blow", "Heroic Strike", "Demoralizing Shout", "Sunder Armor", "Hamstring",
+    "Cleave", "Whirlwind", "Pummel", "Execute", "Intercept",
+    "Revenge", "Shield Bash", "Shield Block", "Disarm", "Retaliation",
+    "Recklessness", "Taunt", "Berserker Rage", "Bloodrage", "Challenging Shout",
+    "Slam", "Mortal Strike", "Sweeping Strikes", "Shield Wall", "Last Stand", "Victory Rush",
+	"Raging Blow", "Quick Strike"
+};
+
+List<string> BuffsList = new List<string>
+{
+    "Battle Shout", "Bloodrage", "Berserker Rage", "Shield Block", "Retaliation",
+    "Recklessness", "Last Stand", "Shield Wall", "Sweeping Strikes", "Enrage",
+    "Death Wish", "Flurry", "Rampage", "Divine Shield", "Retaliation", "Divine Protection",
+	"Enrage"
+};
+
+List<string> DebuffsList = new List<string>
+{
+    "Rend", "Thunder Clap", "Demoralizing Shout", "Sunder Armor", "Hamstring",
+    "Deep Wounds", "Mortal Strike", "Intimidating Shout", "Piercing Howl", "Disarm",
+    "Challenging Shout", "Crippling Poison", "Deadly Poison", "Wound Poison", 
+	"Intimidating Shout", "Fear", "Psycic Scream", "Polymorph"
+};
+
+List<string> CustomCommandsList = new List<string>
+{
+    "ChargeOff", "RendOn", "SunderOn", "HamstringOn", "PoolRage", "PvPOn"
+};
+
+List<string> GeneralBuffsList = new List<string>
+{
+    "Refreshment", "Eat", "Drink", "Food & Drink"
+};
+
+private Stopwatch autoAttackTimer = new Stopwatch();
+private DateTime lastSapTime = DateTime.MinValue;
+
+private void InitializeCustomLUAFunctions()
+{
+    CustomFunctions.Add("IsWandEquipped", "return IsEquippedItemType('Wands') and 1 or 0");
+    CustomFunctions.Add("IsWanding", "return IsAutoRepeatSpell(GetSpellInfo(5019)) and 1 or 0");
+    CustomFunctions.Add("SoulShardCount", "return GetItemCount(6265) or 0");
+
+    AddSpellCheckFunction("IsTargetElite", "elite", "worldboss");
+    AddSpellCheckFunction("MouseoverHasCurseOfAgony", "1014");
+    AddSpellCheckFunction("MouseoverHasCorruption", "6222");
+	AddSpellCheckFunction("MouseoverHasImmolate", "1094");
+	AddSpellCheckFunction("MouseoverHasSiphon", "18265");
+    AddSpellCheckFunction("MouseoverHasFear", "5782");
+
+    CustomFunctions.Add("IsShiftKeyDown", "return IsShiftKeyDown() and 1 or 0");
+    CustomFunctions.Add("IsControlKeyDown", "return IsControlKeyDown() and 1 or 0");
+
+    // Add the function to check if the target is a humanoid
+    CustomFunctions.Add("IsTargetHumanoid", @"
+        local creatureType = UnitCreatureType('target')
+        return creatureType == 'Humanoid' and 1 or 0
+    ");
+	
+	CustomFunctions.Add("GetPlayerRage", @"
+        return UnitPower('player', 1) -- 1 represents the power type for rage
+    ");
+	
+	CustomFunctions.Add("GetPlayerMaxRage", @"
+		return UnitPowerMax('player', 1) -- 1 represents the power type for rage
+	");
+	
+	CustomFunctions.Add("IsHeroicStrikeQueued", "return IsCurrentSpell(1608) and 1 or 0");
+	CustomFunctions.Add("IsCleaveQueued", "return IsCurrentSpell(845) and 1 or 0");
+
+	
+	CustomFunctions.Add("IsPriestOrPaladin", @"
+    local _, classFilename = UnitClass('mouseover')
+    return (classFilename == 'PRIEST' or classFilename == 'PALADIN') and 1 or 0
+	");
+	
+	CustomFunctions.Add("IsTargetPlayer", @"
+    return UnitIsPlayer('target') and 1 or 0
+	");
+
+	CustomFunctions.Add("IsAutoAttacking", "return IsCurrentSpell(6603) and 1 or 0");
+	
+	CustomFunctions.Add("TargetIsCasting", "return UnitCastingInfo('target') ~= nil and 1 or 0");
+    CustomFunctions.Add("TargetIsInterruptible", @"
+        local name, _, _, _, _, _, _, notInterruptible = UnitCastingInfo('target')
+        return not notInterruptible and 1 or 0
+    ");
+	
+	
+
+	CustomFunctions.Add("IsUnitTargetDivineShielded", @"
+        for i = 1, 40 do
+            local name = UnitBuff('target', i)
+            if name == 'Divine Shield' then
+                return 1
+            end
+        end
+        return 0
+    ");
+
+    CustomFunctions.Add("IsUnitTargetRetaliating", @"
+        for i = 1, 40 do
+            local name = UnitBuff('target', i)
+            if name == 'Retaliation' then
+                return 1
+            end
+        end
+        return 0
+    ");
+	
+	CustomFunctions.Add("IsTargetElemental", @"
+        local creatureType = UnitCreatureType('target')
+        return creatureType == 'Elemental' and 1 or 0
+    ");
+	
+	CustomFunctions.Add("IsWarrior", @"
+    local _, classFilename = UnitClass('target')
+    return (classFilename == 'WARRIOR') and 1 or 0
+	");
+
+	CustomFunctions.Add("IsDruid", @"
+    local _, classFilename = UnitClass('target')
+    return (classFilename == 'DRUID') and 1 or 0
+	");
+	
+ CustomFunctions.Add("IsDualWieldEquipped", @"
+        local mainHandID = GetInventoryItemID('player', 16)
+        local offHandID = GetInventoryItemID('player', 17)
+        if mainHandID and offHandID then
+            return 1
+        else
+            return 0
+        end
+    ");
+
+    CustomFunctions.Add("IsTwoHandEquipped", @"
+        local mainHandID = GetInventoryItemID('player', 16)
+        if mainHandID then
+            local _, _, _, _, _, _, _, _, itemEquipLoc = GetItemInfo(mainHandID)
+            return itemEquipLoc == 'INVTYPE_2HWEAPON' and 1 or 0
+        else
+            return 0
+        end
+    ");
+	
+	CustomFunctions.Add("HasControlImpairingDebuff", @"
+    local debuffs = {5588, 339, 1062, 122, 400009} -- Replace with actual spell IDs
+    for i = 1, 40 do
+        local name, _, _, _, _, _, _, _, _, spellId = UnitDebuff('player', i)
+        if name then
+            for _, debuffId in ipairs(debuffs) do
+                if spellId == debuffId then
+                    return 1
+                end
+            end
+        end
+    end
+    return 0
+");
+
+// CustomFunctions.Add("TimeUntilNextOffHandSwing", @"
+        // local _, offHandSpeed = UnitAttackSpeed('player')
+        // local _, _, _, _, _, _, offHandStartTime = GetWeaponEnchantInfo()
+        // if offHandSpeed and offHandStartTime then
+            // local timeSinceLastSwing = GetTime() - offHandStartTime
+            // return offHandSpeed - timeSinceLastSwing
+        // end
+        // return offHandSpeed
+    // ");
+
+	
+}
+
+private void AddSpellCheckFunction(string functionName, params string[] args)
+{
+    string luaScript;
+    if (args.Length > 1)
+    {
+        luaScript = string.Format(@"
+            local classification = UnitClassification('target')
+            return (classification == '{0}' or classification == '{1}') and 1 or 0
+        ", args[0], args[1]);
+    }
+    else
+    {
+        luaScript = string.Format(@"
+            for i = 1, 40 do
+                if UnitDebuff('mouseover', i) == GetSpellInfo({0}) then return 1 end
+            end
+            return 0
+        ", args[0]);
+    }
+
+    CustomFunctions.Add(functionName, luaScript);
+}
+
+public override void LoadSettings()
+{
+    Settings.Add(new Setting("Game Client Language", new List<string> { "English" }, "English"));
+}
+
+public override void Initialize()
+{
+    Aimsharp.PrintMessage("SoD Classic Warrior", Color.Brown);
+    Aimsharp.PrintMessage("Version 1.0 (WoW SoD Classic)", Color.Brown);
+
+    // Define Warlock-specific macros
+    var macros = new Dictionary<string, string>
+    {
+        {"Stopcast", "/stopcasting"},
+        {"AutoAttack", "/startattack"},
+		{"HamstringQueueHSMacro", "/cast Hamstring\\n/cast !Heroic Strike"},
+		{"HamstringQueueCleaveMacro", "/cast Hamstring\\n/cast !Cleave"},
+		{"QuickStrikeQueueHSMacro", "/cast Quick Strike\\n/cast !Heroic Strike"},
+		{"QuickStrikeQueueCleaveMacro", "/cast Quick Strike\\n/cast !Cleave"},
+		{"CleaveMacro", "/cast !Cleave"},
+		{"HeroicStrikeMacro", "/cast !Heroic Strike"},
+		{"TopTrinket", "/use 13"},
+		{"BottomTrinket", "/use 14"},
+		
+	};
+	
+	
+    foreach (var macro in macros)
+    {
+        Macros.Add(macro.Key, macro.Value);
+    }
+
+    InitializeCustomLUAFunctions();
+	
+	// Items.Add("Greater Healing Potion");
+	// Items.Add("Healing Potion");
+
+    var items = new List<string> {   };
+    foreach (var item in items)
+    {
+        Items.Add(item);
+    }
+
+    AddToCollection(Spellbook, SpellsList);
+    AddToCollection(Buffs, BuffsList);
+    AddToCollection(Buffs, GeneralBuffsList);
+    AddToCollection(Debuffs, DebuffsList);
+    AddToCollection(CustomCommands, CustomCommandsList);
+}
+
+private void AddToCollection(ICollection<string> collection, IEnumerable<string> items)
+{
+    foreach (var item in items)
+    {
+        collection.Add(item);
+    }
+}
+
+public override bool CombatTick()
+{
+    bool pauseRota = Aimsharp.HasDebuff("Gouge", "target") || Aimsharp.HasBuff("Retaliation", "target") || 
+                     Aimsharp.HasBuff("Divine Protection", "target") || Aimsharp.HasDebuff("Sap", "target");
+    bool ragePool = Aimsharp.IsCustomCodeOn("PoolRage");
+    bool PvPOn = Aimsharp.IsCustomCodeOn("PvPOn");
+
+    if (pauseRota)
+		{
+			return false;
+		}
+	if (PvPOn)
+		{
+			return WarriorPvPRotation();
+		}
+			return WarriorRotation();
+}
+
+private bool WarriorRotation()
+{
+    bool Fighting = Aimsharp.Range("target") <= 5 && Aimsharp.TargetIsEnemy();
+   
+	UseTrinketForDebuffs();
+    // CancelStrikes();
+   
+	if (!Fighting) return false;
+
+    CastAbilities();
+	HandleRage();
+
+	return false;
+}
+
+private bool WarriorPvPRotation()
+{
+    int Rage = Aimsharp.CustomFunction("GetPlayerRage"); // Get current rage
+    int targetHealth = Aimsharp.Health("target"); // Target's health percentage
+    int EnemiesNearby = Aimsharp.EnemiesInMelee(); // Number of enemies in melee range
+    bool isHeroicStrikeQueued = Aimsharp.CustomFunction("IsHeroicStrikeQueued") == 1; // Check if Heroic Strike is queued
+    bool isCleaveQueued = Aimsharp.CustomFunction("IsCleaveQueued") == 1; // Check if Cleave is queued
+	bool Fighting = Aimsharp.Range("target") <= 5 && Aimsharp.TargetIsEnemy();
+	bool PvPOn = Aimsharp.IsCustomCodeOn("PvPOn");
+	bool ChargeOn = Aimsharp.IsCustomCodeOn("ChargeOff");
+	int targetRange = Aimsharp.Range("target");
+
+	UseTrinketForDebuffs();
+	
+	//Warbringer
+	if (Aimsharp.CanCast("Charge") && targetRange >= 8 && targetRange <= 25 && !ChargeOn && Aimsharp.TargetIsEnemy())
+    {
+        Aimsharp.Cast("Charge");
+        return true;
+    }
+
+    if (!Fighting) return false;
+	
+	CastAbilities();
+
+	 // Quick Strike
+    if (Aimsharp.CanCast("Quick Strike"))
+    {
+        Aimsharp.Cast("Quick Strike");
+        return true;
+    }
+
+    // Heroic Strike or Cleave
+    if (Rage > 50 && !isHeroicStrikeQueued && !isCleaveQueued)
+    {
+        if (EnemiesNearby < 2)
+        {
+            Aimsharp.Cast("Heroic Strike");
+            return true;
+        }
+        else
+        {
+            Aimsharp.Cast("Cleave");
+            return true;
+        }
+    }
+
+    
+
+    return false;
+}
+
+
+private bool HandlePooling()
+{
+	bool hasEnrage = Aimsharp.HasBuff("Enrage", "player");
+	int enrageRemaining = Aimsharp.BuffRemaining("Enrage", "player");
+	int Rage = Aimsharp.CustomFunction("GetPlayerRage");
+	
+	if (!hasEnrage || enrageRemaining <= 4000 || Rage == 0)
+    {
+        Aimsharp.PrintMessage("Pooling Rage", Color.Yellow);
+        EnsureAutoAttack();
+    }
+	return false;
+}
+
+private bool HandleRage()
+{  
+	int enrageRemaining = Aimsharp.BuffRemaining("Enrage", "player");
+    int bloodrageRemaining = Aimsharp.BuffRemaining("Bloodrage", "player");
+	int MaxRage = Aimsharp.CustomFunction("GetPlayerMaxRage");
+	int Rage = Aimsharp.CustomFunction("GetPlayerRage");
+	bool hasEnrage = Aimsharp.HasBuff("Enrage", "player");
+	bool ragePool = Aimsharp.IsCustomCodeOn("PoolRage");
+	
+	if (!ragePool)
+    {
+        if (!hasEnrage && Rage >= MaxRage * 0.95 && Rage > 75) // Start dumping at 90% of max rage
+        {
+            Aimsharp.PrintMessage("Dumping Rage - Nearing Max Capacity", Color.Red);
+            DumpRageCancel();
+            return true;
+        }
+
+        if ((hasEnrage && enrageRemaining > 5000) || (!hasEnrage && Rage > 80))
+        {
+            Aimsharp.PrintMessage("Dumping Rage", Color.Red);
+            DumpRageCancel();
+            return true;
+        }
+		
+    }
+	HandlePooling();
+	
+	return false;
+}
+
+private bool CastAbilities()
+{
+    int targetHealth = Aimsharp.Health("target");
+    int Rage = Aimsharp.CustomFunction("GetPlayerRage");
+    int SunderArmorStacks = Aimsharp.DebuffStacks("Sunder Armor");
+    bool SunderOn = Aimsharp.IsCustomCodeOn("SunderOn");
+    bool RendOn = Aimsharp.IsCustomCodeOn("RendOn");
+    bool HamOn = Aimsharp.IsCustomCodeOn("HamstringOn");
+    bool hasBloodrage = Aimsharp.HasBuff("Bloodrage", "player");
+    bool hasEnrage = Aimsharp.HasBuff("Enrage", "player");
+    int targetPlayer = Aimsharp.CustomFunction("IsTargetPlayer");
+
+    if (Aimsharp.CanCast("Execute") && targetHealth <= 20 && targetPlayer == 1 && (!SunderOn || SunderArmorStacks == 5))
+    {
+        Aimsharp.Cast("Execute");
+        return true;
+    }
+
+    if (Aimsharp.CanCast("Battle Shout") && !Aimsharp.HasBuff("Battle Shout", "player") && Rage >= 10 && (!SunderOn || SunderArmorStacks == 5))
+    {
+        Aimsharp.Cast("Battle Shout");
+        return true;
+    }
+
+    if (Aimsharp.CanCast("Overpower") && (!SunderOn || SunderArmorStacks == 5))
+    {
+        Aimsharp.Cast("Overpower");
+        return true;
+    }
+
+    if (Aimsharp.CanCast("Sunder Armor") && SunderOn && SunderArmorStacks < 5)
+    {
+        Aimsharp.Cast("Sunder Armor");
+        return true;
+    }
+
+    if (Aimsharp.CanCast("Hamstring") && !Aimsharp.HasDebuff("Hamstring", "target") && HamOn && (!SunderOn || SunderArmorStacks == 5) && Aimsharp.LastCast() != "Hamstring")
+    {
+        Aimsharp.Cast("Hamstring");
+        return true;
+    }
+
+    if (Aimsharp.CanCast("Rend") && !Aimsharp.HasDebuff("Rend", "target") && RendOn && (!SunderOn || SunderArmorStacks == 5))
+    {
+        Aimsharp.Cast("Rend");
+        return true;
+    }
+
+    if (Aimsharp.CanCast("Raging Blow") && (hasEnrage || hasBloodrage) && (!SunderOn || SunderArmorStacks == 5))
+    {
+        Aimsharp.Cast("Raging Blow");
+        return true;
+    }
+
+    return false;
+}
+
+private bool DumpRage()
+{
+    int EnemiesNearby = Aimsharp.EnemiesInMelee();
+    bool isHeroicStrikeQueued = Aimsharp.CustomFunction("IsHeroicStrikeQueued") == 1;
+    bool isCleaveQueued = Aimsharp.CustomFunction("IsCleaveQueued") == 1;
+    bool isDualWieldEquipped = Aimsharp.CustomFunction("IsDualWieldEquipped") == 1;
+    bool isTwoHandEquipped = Aimsharp.CustomFunction("IsTwoHandEquipped") == 1;
+
+    // Only cast Quick Strike or Hamstring if Heroic Strike or Cleave is not already queued
+		if (isTwoHandEquipped && (isHeroicStrikeQueued || isCleaveQueued))
+        {
+            Aimsharp.Cast("Quick Strike");
+        }
+        else if (isTwoHandEquipped && EnemiesNearby >= 2 && !isCleaveQueued)
+        {
+            Aimsharp.Cast("CleaveMacro"); // Assuming you want to cast Cleave in AoE situations
+        }
+		else if (isTwoHandEquipped && EnemiesNearby < 2 && !isHeroicStrikeQueued)
+        {
+            Aimsharp.Cast("HeroicStrikeMacro"); 
+        }
+        else if (isDualWieldEquipped && (isHeroicStrikeQueued || isCleaveQueued))
+        {
+            Aimsharp.Cast("Hamstring");
+        }
+		else if (isDualWieldEquipped && EnemiesNearby < 2 && !isHeroicStrikeQueued)
+        {
+            Aimsharp.Cast("HeroicStrikeMacro"); 
+        }
+        else if (isDualWieldEquipped && EnemiesNearby >= 2 && !isCleaveQueued)
+        {
+            Aimsharp.Cast("CleaveM"); // Assuming Hamstring in AoE if dual wielding
+        }
+    
+	return false;
+}
+
+private bool DumpRageCancel()
+{
+    int EnemiesNearby = Aimsharp.EnemiesInMelee();
+    bool isHeroicStrikeQueued = Aimsharp.CustomFunction("IsHeroicStrikeQueued") == 1;
+    bool isCleaveQueued = Aimsharp.CustomFunction("IsCleaveQueued") == 1;
+    bool isDualWieldEquipped = Aimsharp.CustomFunction("IsDualWieldEquipped") == 1;
+    bool isTwoHandEquipped = Aimsharp.CustomFunction("IsTwoHandEquipped") == 1;
+    float timeUntilNextOffHandSwing = Aimsharp.CustomFunction("TimeUntilNextOffHandSwing");
+
+
+	 // Cast Quick Strike or Hamstring if Heroic Strike or Cleave is not queued
+    if (isTwoHandEquipped && (isHeroicStrikeQueued || isCleaveQueued))
+    {
+        Aimsharp.Cast("Quick Strike");
+    }
+    else if (isDualWieldEquipped && (isHeroicStrikeQueued || isCleaveQueued))
+    {
+        Aimsharp.Cast("Hamstring");
+    }
+	
+    // Queue Heroic Strike or Cleave based on conditions
+    if (isDualWieldEquipped)
+    {
+        if (EnemiesNearby < 2 && !isHeroicStrikeQueued)
+        {
+            Aimsharp.Cast("HeroicStrikeMacro"); // Queue Heroic Strike
+        }
+        else if (EnemiesNearby >= 2 && !isCleaveQueued)
+        {
+            Aimsharp.Cast("CleaveMacro"); // Queue Cleave
+        }
+    }
+
+    // Cancel Heroic Strike or Cleave right before offhand swing
+    // Note: This is an approximation and may not be perfectly timed
+   /*  if ((isHeroicStrikeQueued || isCleaveQueued) && timeUntilNextOffHandSwing < 0.9)
+    {
+        Aimsharp.Cast("Stopcast"); // A macro to cancel the queued ability
+		Aimsharp.PrintMessage("Stopping Offhand Heroic Strike or Cleave Queue", Color.Orange);
+    } */
+
+   
+
+    return false;
+}
+
+private bool CancelStrikes()
+{
+    float timeUntilNextOffHandSwing = Aimsharp.CustomFunction("TimeUntilNextOffHandSwing");
+	bool isHeroicStrikeQueued = Aimsharp.CustomFunction("IsHeroicStrikeQueued") == 1;
+    bool isCleaveQueued = Aimsharp.CustomFunction("IsCleaveQueued") == 1;
+
+	// If the target is within melee range and we're not already auto-attacking, then start auto-attacking
+    if ((isHeroicStrikeQueued || isCleaveQueued) && timeUntilNextOffHandSwing < 0.5)
+    {
+        Aimsharp.Cast("Stopcast"); // A macro to cancel the queued ability
+		Aimsharp.PrintMessage("Stopping Offhand Heroic Strike or Cleave Queue", Color.Orange);
+    }
+
+    return false;
+}
+
+private bool EnsureAutoAttack()
+{
+    int targetRange = Aimsharp.Range("target"); // Get the range to the target
+    int isAutoAttacking = Aimsharp.CustomFunction("IsAutoAttacking"); // 1 if auto-attacking, 0 otherwise
+
+
+    // If the target is within melee range and we're not already auto-attacking, then start auto-attacking
+    if (targetRange <= 5 && isAutoAttacking == 0)
+    {
+        Aimsharp.Cast("AutoAttack"); 
+        return true;
+    }
+
+    return false;
+}
+
+private bool UseTrinketForDebuffs()
+{
+    bool hasControlImpairingDebuff = Aimsharp.CustomFunction("HasControlImpairingDebuff") == 1;
+    bool canUseTopTrinket = Aimsharp.CanUseTrinket(0);
+    bool canUseBottomTrinket = Aimsharp.CanUseTrinket(1);
+
+    if (hasControlImpairingDebuff)
+    {
+        if (canUseTopTrinket)
+        {
+            Aimsharp.Cast("TopTrinket");
+            return true;
+        }
+        
+    }
+
+    return false;
+}
+
+public override bool OutOfCombatTick()
+{
+	bool pauseRota = Aimsharp.HasDebuff("Gouge", "target") || Aimsharp.HasBuff("Divine Protection", "target") || Aimsharp.HasBuff("Retaliation", "target") || Aimsharp.HasDebuff("Sap", "target") || Aimsharp.HasDebuff("Freezing Trap", "target");
+	bool Drinking = (Aimsharp.HasBuff("Refreshment", "player") || Aimsharp.HasBuff("Drink", "player") || Aimsharp.HasBuff("Eat", "player") || Aimsharp.HasBuff("Food & Drink", "player"));
+    int gcdRemaining = Aimsharp.GCD();
+    int playerLevel = Aimsharp.GetPlayerLevel();
+    int playerHealth = Aimsharp.Health("player");
+    int targetHealth = Aimsharp.Health("target");
+    bool isMoving = Aimsharp.PlayerIsMoving();
+    int isShiftKeyDown = Aimsharp.CustomFunction("IsShiftKeyDown");
+    int playerCasting = Aimsharp.CastingID("player");
+    int targetRange = Aimsharp.Range("target");
+	bool ChargeOn = Aimsharp.IsCustomCodeOn("ChargeOff");
+	bool Fighting = Aimsharp.Range("target") <= 5 && Aimsharp.TargetIsEnemy();
+	int Rage = Aimsharp.CustomFunction("GetPlayerRage");
+	
+    if (pauseRota || Drinking || playerCasting != 0)
+    {
+       return false;
+    }
+	if (Aimsharp.CanCast("Charge") && targetRange >= 8 && targetRange <= 25 && !ChargeOn && Aimsharp.TargetIsEnemy())
+    {
+        Aimsharp.Cast("Charge");
+        return true;
+    }
+	if (Aimsharp.CanCast("Battle Shout") && !Aimsharp.HasBuff("Battle Shout", "player"))
+    {
+        Aimsharp.Cast("Battle Shout");
+        return true;
+    }
+
+	if (!Fighting)
+        return false;
+
+	EnsureAutoAttack();
+	
+	
+	
+    return false;
+}
+
+}
+}
+
+/* private bool LevellingWarriorRotation()
+{
+    bool Fighting = Aimsharp.Range("target") <= 5 && Aimsharp.TargetIsEnemy();
+    bool IsHighHpBoss = Aimsharp.Health("target") > 70; 
+    int PlayerLevel = Aimsharp.GetPlayerLevel();
+    int EnemiesNearby = Aimsharp.EnemiesInMelee();
+	int SunderArmorStacks = Aimsharp.DebuffStacks("Sunder Armor");
+	bool SunderOn = Aimsharp.IsCustomCodeOn("SunderOff");
+	bool RendOn = Aimsharp.IsCustomCodeOn("RendOff");
+	bool HamOn = Aimsharp.IsCustomCodeOn("HamOff");
+	bool isMoving = Aimsharp.PlayerIsMoving();
+	int Rage = Aimsharp.CustomFunction("GetPlayerRage");
+	int targetHealth = Aimsharp.Health("target");
+	bool ragePool = Aimsharp.IsCustomCodeOn("PoolRage");
+	bool aoeDebuffs = Aimsharp.HasDebuff("Demoralizing Roar", "target") && Aimsharp.HasDebuff("Thunderclap", "target");
+	
+	
+    if (!Fighting || ragePool)
+        return false;
+
+	EnsureAutoAttack();
+	
+	if (Aimsharp.CanCast("Battle Shout") && !Aimsharp.HasBuff("Battle Shout", "player"))
+    {
+        Aimsharp.Cast("Battle Shout");
+        return true;
+    }
+	if (Aimsharp.CanCast("Execute") && targetHealth <= 20)
+    {
+        Aimsharp.Cast("Execute");
+        return true;
+    }
+	//Debuffs for defense
+	if (EnemiesNearby > 2)
+    {
+        if (Aimsharp.CanCast("Demoralizing Roar") && !Aimsharp.HasDebuff("Demoralizing Roar", "target"))
+        {
+            Aimsharp.Cast("Demoralizing Roar");
+        }
+        else if (Aimsharp.CanCast("Thunderclap") && !Aimsharp.HasDebuff("Thunderclap", "target"))
+        {
+            Aimsharp.Cast("Thunderclap");
+        }
+        return true;
+    }
+	if (EnemiesNearby > 1 && aoeDebuffs) 
+    {
+        if (Aimsharp.CanCast("Cleave"))
+        {
+            Aimsharp.Cast("Cleave");
+        }
+        return true;
+    }
+    if (Aimsharp.CanCast("Overpower"))
+    {
+        Aimsharp.Cast("Overpower");
+        return true;
+    }
+	
+	if (Aimsharp.CanCast("Raging Blow"))
+    {
+        Aimsharp.Cast("Raging Blow");
+        return true;
+    }
+	if (Aimsharp.CanCast("Rend") && !Aimsharp.HasDebuff("Rend", "target") && !RendOn)
+    {
+        Aimsharp.Cast("Rend");
+        return true;
+    }
+	if (Aimsharp.CanCast("Victory Rush"))
+    {
+        Aimsharp.Cast("Victory Rush");
+        return true;
+    }
+	if (Aimsharp.CanCast("Sunder Armor") && !SunderOn)
+    {
+        Aimsharp.Cast("Sunder Armor");
+        return true;
+    }
+	
+
+    // Use Hamstring if you still have rage remaining as Dual Wield
+    if (Aimsharp.CanCast("Hamstring")  && !HamOn && isMoving &&!Aimsharp.HasDebuff("Hamstring", "target"))
+    {
+        Aimsharp.Cast("Hamstring");
+        return true;
+    }
+
+    return false;
+} */
+/* private bool WarriorRotation2()
+{
+    int Rage = Aimsharp.CustomFunction("GetPlayerRage");
+    int RagingBlowCooldown = Aimsharp.SpellCooldown("Raging Blow");
+	int targetRange = Aimsharp.Range("target"); 
+    int isAutoAttacking = Aimsharp.CustomFunction("IsAutoAttacking");
+	bool Fighting = Aimsharp.Range("target") <= 5 && Aimsharp.TargetIsEnemy();
+	bool ragePool = Aimsharp.IsCustomCodeOn("PoolRage");
+	bool hasBloodrage = Aimsharp.HasBuff("Bloodrage", "player");
+	bool hasEnrage = Aimsharp.HasBuff("Enrage", "player");
+	int targetHealth = Aimsharp.Health("target");
+	int EnemiesNearby = Aimsharp.EnemiesInMelee();
+	int SunderArmorStacks = Aimsharp.DebuffStacks("Sunder Armor");
+	bool SunderOn = Aimsharp.IsCustomCodeOn("SunderOn");
+	bool RendOn = Aimsharp.IsCustomCodeOn("RendOn");
+	bool DWON = Aimsharp.IsCustomCodeOn("DualWieldOn");
+	bool HamOn = Aimsharp.IsCustomCodeOn("HamstringOn");
+	int targetPlayer = Aimsharp.CustomFunction("IsTargetPlayer");
+	int enrageRemaining = Aimsharp.BuffRemaining("Enrage", "player");
+	int bloodrageRemaining = Aimsharp.BuffRemaining("Bloodrage", "player");
+	// bool TwoHand = Aimsharp.IsCustomCodeOn("IsTwoHandEquipped");
+	// bool OneHand = Aimsharp.IsCustomCodeOn("IsDualWieldEquipped");
+	
+	
+	if (!Fighting || ragePool)
+        return false;
+	
+	if (Aimsharp.CanCast("Execute") && targetHealth <= 20 && targetPlayer == 1)
+    {
+        Aimsharp.Cast("Execute");
+        return true;
+    }
+	if (Aimsharp.CanCast("Battle Shout") && !Aimsharp.HasBuff("Battle Shout", "player") && Rage >= 10)
+    {
+        Aimsharp.Cast("Battle Shout");
+        return true;
+    }
+	if (Aimsharp.CanCast("Overpower"))
+    {
+        Aimsharp.Cast("Overpower");
+        return true;
+    }
+	if (Aimsharp.CanCast("Sunder Armor") && SunderOn && SunderArmorStacks > 4)
+    {
+        Aimsharp.Cast("Sunder Armor");
+        return true;
+    }
+	if (Aimsharp.CanCast("Hamstring") && !Aimsharp.HasDebuff("Hamstring", "target") && HamOn)
+    {
+        Aimsharp.Cast("Hamstring");
+        return true;
+    }
+	if (Aimsharp.CanCast("Rend") && !Aimsharp.HasDebuff("Rend", "target") && RendOn)
+    {
+        Aimsharp.Cast("Rend");
+        return true;
+    }
+	if ((hasEnrage || hasBloodrage) && Aimsharp.CanCast("Raging Blow"))
+    {
+        Aimsharp.Cast("Raging Blow");
+        return true;
+    }
+	// if ((enrageRemaining > 3000 || bloodrageRemaining > 3000) && Rage > 50)
+	// {
+		if (RagingBlowCooldown > 500 && Aimsharp.CanCast("Heroic Strike") && EnemiesNearby < 2 && Rage >= 88)
+		{
+			Aimsharp.Cast("Heroic Strike");
+			return true;
+		}
+		if ((RagingBlowCooldown > 300 || Rage >= 85 && !hasEnrage) && Aimsharp.CanCast("Cleave") && EnemiesNearby >= 2 && Rage >= 85 && targetPlayer == 0)
+			{
+				Aimsharp.Cast("Cleave");
+				return true;
+			}
+		if ((RagingBlowCooldown > 300 || Rage >= 85 && !hasEnrage) && Aimsharp.CanCast("Hamstring") && ((Rage >= 10 && hasEnrage) || Rage >= 85) && DWON && targetPlayer == 0) 
+			{
+				Aimsharp.Cast("Hamstring");
+				return true;
+			}
+		if ((RagingBlowCooldown > 300 || Rage >= 80 && !hasEnrage) && Aimsharp.CanCast("Quick Strike") && EnemiesNearby < 2 && Rage >= 85 && !DWON) 
+		{
+			Aimsharp.Cast("Quick Strike");
+			return true;
+		}
+	// }
+      
+    if (RagingBlowCooldown < 3500) // 2000ms left on Raging Blow cooldown
+    {
+        if (targetRange <= 5 && isAutoAttacking == 0)
+		{
+			Aimsharp.Cast("AutoAttack"); 
+			return true;
+		}
+    }
+
+    return false;
+}
+ */
+/* private bool WarriorRotationTest00()
+{
+    int Rage = Aimsharp.CustomFunction("GetPlayerRage");
+    int RagingBlowCooldown = Aimsharp.SpellCooldown("Raging Blow");
+    int targetRange = Aimsharp.Range("target"); 
+    int isAutoAttacking = Aimsharp.CustomFunction("IsAutoAttacking");
+    bool Fighting = Aimsharp.Range("target") <= 5 && Aimsharp.TargetIsEnemy();
+    bool ragePool = Aimsharp.IsCustomCodeOn("PoolRage");
+    bool hasBloodrage = Aimsharp.HasBuff("Bloodrage", "player");
+    bool hasEnrage = Aimsharp.HasBuff("Enrage", "player");
+    int targetHealth = Aimsharp.Health("target");
+    int EnemiesNearby = Aimsharp.EnemiesInMelee();
+    int SunderArmorStacks = Aimsharp.DebuffStacks("Sunder Armor");
+    bool SunderOn = Aimsharp.IsCustomCodeOn("SunderOn");
+    bool RendOn = Aimsharp.IsCustomCodeOn("RendOn");
+    bool DWON = Aimsharp.IsCustomCodeOn("DualWieldOn");
+    bool HamOn = Aimsharp.IsCustomCodeOn("HamstringOn");
+    int targetPlayer = Aimsharp.CustomFunction("IsTargetPlayer");
+    int enrageRemaining = Aimsharp.BuffRemaining("Enrage", "player");
+    int bloodrageRemaining = Aimsharp.BuffRemaining("Bloodrage", "player");
+
+    if (!Fighting || ragePool)
+        return false;
+
+    if (Aimsharp.CanCast("Execute") && targetHealth <= 20 && targetPlayer == 1)
+    {
+        Aimsharp.Cast("Execute");
+        return true;
+    }
+
+    if (Aimsharp.CanCast("Battle Shout") && !Aimsharp.HasBuff("Battle Shout", "player") && Rage >= 10)
+    {
+        Aimsharp.Cast("Battle Shout");
+        return true;
+    }
+
+    if (Aimsharp.CanCast("Overpower"))
+    {
+        Aimsharp.Cast("Overpower");
+        return true;
+    }
+
+    if (Aimsharp.CanCast("Sunder Armor") && SunderOn && SunderArmorStacks < 5)
+    {
+        Aimsharp.Cast("Sunder Armor");
+        return true;
+    }
+
+    if (Aimsharp.CanCast("Hamstring") && !Aimsharp.HasDebuff("Hamstring", "target") && HamOn)
+    {
+        Aimsharp.Cast("Hamstring");
+        return true;
+    }
+
+    if (Aimsharp.CanCast("Rend") && !Aimsharp.HasDebuff("Rend", "target") && RendOn)
+    {
+        Aimsharp.Cast("Rend");
+        return true;
+    }
+
+    if (hasEnrage || hasBloodrage)
+    {
+        if (Aimsharp.CanCast("Raging Blow"))
+        {
+            Aimsharp.Cast("Raging Blow");
+            return true;
+        }
+
+        if (enrageRemaining > 4000) // Dumping for the first 8 seconds
+        {
+            if (Rage >= 80)
+            {
+                if (EnemiesNearby < 2 && Aimsharp.CanCast("Heroic Strike"))
+                {
+                    Aimsharp.PrintMessage("Dumping Rage - Heroic Strike", Color.Red);
+                    Aimsharp.Cast("Heroic Strike");
+                    return true;
+                }
+                else if (EnemiesNearby >= 2 && Aimsharp.CanCast("Cleave"))
+                {
+                    Aimsharp.PrintMessage("Dumping Rage - Cleave", Color.Red);
+                    Aimsharp.Cast("Cleave");
+                    return true;
+                }
+            }
+
+            if ((Rage >= 10 && hasEnrage) || Rage >= 80)
+            {
+                if (DWON && Aimsharp.CanCast("Hamstring"))
+                {
+                    Aimsharp.PrintMessage("Dumping Rage - Hamstring", Color.Red);
+                    Aimsharp.Cast("Hamstring");
+                    return true;
+                }
+            }
+        }
+        else if (!hasEnrage && Rage > 80) // Need to dump rage to reactivate Enrage
+        {
+            Aimsharp.PrintMessage("Dumping Rage to Reactivate Enrage", Color.Red);
+            if (EnemiesNearby < 2 && Aimsharp.CanCast("Heroic Strike"))
+            {
+                Aimsharp.Cast("Heroic Strike");
+                return true;
+            }
+            else if (EnemiesNearby >= 2 && Aimsharp.CanCast("Cleave"))
+            {
+                Aimsharp.Cast("Cleave");
+                return true;
+            }
+            else if (DWON && Aimsharp.CanCast("Hamstring"))
+            {
+                Aimsharp.Cast("Hamstring");
+                return true;
+            }
+        }
+    }
+
+    if (!DWON && Aimsharp.CanCast("Quick Strike") && EnemiesNearby < 2 && Rage >= 85)
+    {
+        Aimsharp.Cast("Quick Strike");
+        return true;
+    }
+
+    if (targetRange <= 5 && isAutoAttacking == 0)
+    {
+        Aimsharp.Cast("AutoAttack");
+        return true;
+    }
+
+    return false;
+}
+ */
+/* private bool DumpRage1()
+{
+    int EnemiesNearby = Aimsharp.EnemiesInMelee();
+    bool isDualWieldEquipped = Aimsharp.CustomFunction("IsDualWieldEquipped") == 1;
+    bool isTwoHandEquipped = Aimsharp.CustomFunction("IsTwoHandEquipped") == 1;
+
+    if (isTwoHandEquipped && EnemiesNearby < 2)
+    {
+        Aimsharp.Cast("QuickStrikeQueueHSMacro");
+    }
+    else if (isTwoHandEquipped && EnemiesNearby >= 2)
+    {
+        Aimsharp.Cast("QuickStrikeQueueCleaveMacro");
+    }
+    else if (isDualWieldEquipped && EnemiesNearby < 2)
+    {
+        Aimsharp.Cast("HamstringQueueHSMacro");
+    }
+    else if (isDualWieldEquipped && EnemiesNearby >= 2)
+    {
+        Aimsharp.Cast("HamstringQueueCleaveMacro");
+    }
+	
+    return false;
+} */
+/* private bool Utilities()
+{
+    bool PotReady = Aimsharp.ItemCooldown("Greater Healing Potion") == 0;
+	bool TeaReady = Aimsharp.ItemCooldown("Thistle Tea") == 0;
+	int targetHealth = Aimsharp.Health("target");
+	int playerHealth = Aimsharp.Health("player");
+	int EnemiesAround = Aimsharp.EnemiesInMelee();
+	int playerEnergy = Aimsharp.Power("player");
+	bool needToTrinket = (Aimsharp.HasDebuff("Fear", "player") || Aimsharp.HasDebuff("Psycic Scream", "player") || Aimsharp.HasDebuff("Intimidating Shout", "player") || Aimsharp.HasDebuff("Polymorph", "player"));
+	bool TrinketReady = Aimsharp.CanUseTrinket(0);
+
+	// if (TrinketReady && needToTrinket)
+	// {
+		// Aimsharp.Cast("TopTrink"); 
+		// return true;
+	// }
+	if (Aimsharp.CanUseItem("Thistle Tea", false) && targetHealth < 35 && playerEnergy < 10)
+    {
+        Aimsharp.Cast("Thistle Tea"); 
+        return true;
+    }
+	if (Aimsharp.CanUseItem("Greater Healing Potion", false) && targetHealth < 55 && playerHealth < 35)
+    {
+        Aimsharp.Cast("Greater Healing Potion"); 
+        return true;
+    }
+	if (Aimsharp.CanUseItem("Healing Potion", false) && targetHealth < 55 && playerHealth < 35)
+    {
+        Aimsharp.Cast("Healing Potion"); 
+        return true;
+    }
+	
+    return false;
+} */
+/* private bool AttemptToKick()
+{
+    int targetIsCasting = Aimsharp.CustomFunction("TargetIsCasting");
+    int targetCastingSpellId = Aimsharp.CastingID("target");
+    int targetIsInterruptible = Aimsharp.CustomFunction("TargetIsInterruptible");
+    int kickCooldown = Aimsharp.SpellCooldown("Kick");
+    int playerEnergy = Aimsharp.Power("player");
+    int targetRange = Aimsharp.Range("target"); 
+    bool KickMode = Aimsharp.IsCustomCodeOn("KickOff");
+    int mindBlastSpellId = 425233;
+
+    // Check if the target is casting an interruptible spell and Kick is ready (or almost ready)
+    // Exclude Mind Blast from being interrupted
+    if (targetIsCasting == 1 && targetCastingSpellId != mindBlastSpellId && targetRange <= 5 && !KickMode)
+    {
+        // If Kick is ready, use it
+        if (Aimsharp.CanCast("Kick", "target"))
+        {
+            Aimsharp.Cast("Kick");
+            return true;
+        }
+    }
+
+    return false;
+} */
+/* private bool CastGouge()
+{
+    bool GougeToggle = Aimsharp.IsCustomCodeOn("Gouge");
+    
+    if (GougeToggle && Aimsharp.CanCast("Gouge", "target") && Aimsharp.Health("target") > 0 && Aimsharp.TargetIsEnemy())
+    {
+        Aimsharp.Cast("Gouge");
+        return true;
+    }
+    return false;
+} */
+/* private bool HandleToggles()
+{
+    bool AmbushToggle = Aimsharp.IsCustomCodeOn("AmbushOpen");
+    bool GarroteToggle = Aimsharp.IsCustomCodeOn("GarroteOpen");
+    bool GougeToggle = Aimsharp.IsCustomCodeOn("Gouge");
+
+    if (AmbushToggle && Aimsharp.LastCast() == "Ambush")
+    {
+        Aimsharp.Cast("AmbushToggleOff"); // Automatically toggle off Ambush
+        return true;
+    }
+
+    if (GarroteToggle && Aimsharp.LastCast() == "Garrote")
+    {
+        Aimsharp.Cast("GarroteToggleOff"); // Automatically toggle off Garrote
+        return true;
+    }
+
+    if (GougeToggle && Aimsharp.LastCast() == "Gouge")
+    {
+        Aimsharp.Cast("GougeToggleOff"); // Automatically toggle off Gouge
+        return true;
+    }
+
+    return false;
+}
+ */

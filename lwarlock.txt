@@ -1,0 +1,1788 @@
+using System.Linq;
+using System.Diagnostics;
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using AimsharpWow.API; //needed to access Aimsharp API
+
+namespace AimsharpWow.Modules
+{
+    public class ClassicHardcoreWarlock: Rotation
+    {
+//spellnames
+		List<string> SpellsList = new List<string>
+		{
+			"Shadow Bolt", "Immolate", "Corruption", "Curse of Agony", "Summon Imp", 
+			"Life Tap", "Drain Soul", "Fear", "Create Healthstone", "Unending Breath",
+			"Siphon Life", "Death Coil", "Shadowburn", "Soul Fire", "Dark Pact", "Demon Skin",
+			"Demon Armor", "PetAttack", "Shoot", "Summon Voidwalker", "Drain Life",
+			"Curse of Recklessness", "Haunt", "Demonic Grace", "Rain of Fire", "Chaos Bolt", 
+			"Metamorphosis", "Shadow Cleave", "Searing Pain", "Incinerate", "Drain Mana", "Firebolt",
+			"Hellfire", "Menace", "Curse of the Elements", "Demon Charge", "Demonic Sacrifice", "Soul Link",
+			"Curse of Exhaustion", "Sacrifice", "Healthstone", "Scorch", "Shadow Ward", "Banish"
+		};
+
+		// List of Warlock buffs
+		List<string> BuffsList = new List<string>
+		{
+			"Demon Skin", "Unending Breath", "Demon Armor", "Shadow Trance", "Demonic Grace", "Metamorphosis", "Incinerate", "Soul Siphon",
+			"Fel Stamina", "Fel Energy", "Touch of Shadow", "Burning Wish", "Soul Link", "Master Demonologist", "Sacrifice", "Shadow Ward",	// Include Demon Armor or other relevant buffs
+		};
+
+		// List of Warlock debuffs
+		List<string> DebuffsList = new List<string>
+		{
+			"Corruption", "Curse of Agony", "Immolate", "Siphon Life", "Fear", "Curse of Recklessness", "Haunt", "Drain Life", "Lake of Fire", "Curse of the Elements", "Curse of Exhaustion",
+			"Banish"// Include any additional debuffs used in the rotation
+		};
+
+		// Custom commands specific to the Warlock rotation
+		List<string> CustomCommandsList = new List<string>
+		{
+			"PetAttackOff", "WandingOn", "DrainOn", "PvPOn", "Destro", "FearOn", "LoF", "VolleyOn", "CoR", "ImmoOff", "AfflicOn", "TankRota", "HellfireOn", "AutoTaunt", "CoE", "KickOff", "InvocationToggle", "BanishOn"
+		};
+
+		// General buffs like food and drink
+		List<string> GeneralBuffsList = new List<string>
+		{
+			"Refreshment", "Eat", "Drink", "Food & Drink"
+		};
+		
+private Stopwatch gcdTimer = new Stopwatch(); // Timer to control the Global Cooldown
+private Stopwatch debugTimer = new Stopwatch(); // Timer to control the frequency of debug messages
+private static Stopwatch petAttackTimer = new Stopwatch();
+private bool wandingInitiated = false;		
+private DateTime rainOfFireCastTime;
+private DateTime lastFireboltTime = DateTime.MinValue;
+
+
+private void InitializeCustomLUAFunctions()
+{
+    CustomFunctions.Add("IsWandEquipped", "return IsEquippedItemType('Wands') and 1 or 0");
+    CustomFunctions.Add("IsWanding", "return IsAutoRepeatSpell(GetSpellInfo(5019)) and 1 or 0");
+    CustomFunctions.Add("SoulShardCount", "return GetItemCount(6265) or 0");
+
+    AddSpellCheckFunction("IsTargetElite", "elite", "worldboss");
+    AddSpellCheckFunction("MouseoverHasCurseOfAgony", "1014");
+    AddSpellCheckFunction("MouseoverHasCorruption", "6222");
+	AddSpellCheckFunction("MouseoverHasImmolate", "1094");
+	AddSpellCheckFunction("MouseoverHasSiphon", "18265");
+    AddSpellCheckFunction("MouseoverHasFear", "5782");
+	AddSpellCheckFunction("MouseoverHasLoF", "403650");
+
+    CustomFunctions.Add("IsShiftKeyDown", "return IsShiftKeyDown() and 1 or 0");
+    CustomFunctions.Add("IsControlKeyDown", "return IsControlKeyDown() and 1 or 0");
+	CustomFunctions.Add("IsRightMouseButtonDown", "return IsMouseButtonDown('RightButton') and 1 or 0");
+
+
+    // Add the function to check if the target is a humanoid
+    CustomFunctions.Add("IsTargetHumanoid", @"
+        local creatureType = UnitCreatureType('target')
+        return creatureType == 'Humanoid' and 1 or 0
+    ");
+	
+	CustomFunctions.Add("IsPriest", @"
+    local _, classFilename = UnitClass('mouseover')
+    return (classFilename == 'PRIEST') and 1 or 0
+	");
+	
+	CustomFunctions.Add("IsTargetPlayer", @"
+    return UnitIsPlayer('target') and 1 or 0
+");
+
+	CustomFunctions.Add("IsTargetTotem", @"
+        local name = UnitName('target')
+        local isTotem = name and (name:find('Totem') or name:find('Idol') or name:find('Statue'))
+        return isTotem and UnitIsEnemy('player', 'target') and 1 or 0
+    ");
+	
+	 CustomFunctions.Add("IsShadowBoltVolleyKnown", @"
+        local spellID = 403628 
+        return IsSpellKnown(spellID) and 1 or 0
+    ");
+	
+	CustomFunctions.Add("IsMouseoverEnemy", @"
+        if UnitExists('mouseover') and UnitIsEnemy('player', 'mouseover') then
+            return 1
+        else
+            return 0
+        end
+    ");
+	
+	CustomFunctions.Add("IsPetAttackingMyTarget", @"
+        if UnitExists('pettarget') and UnitIsUnit('pettarget', 'target') then
+            return 1
+        else
+            return 0
+        end
+    ");
+	
+	CustomFunctions.Add("IsPetAnImp", @"
+        if UnitExists('pet') then
+            local petType = UnitCreatureFamily('pet')
+            if petType == 'Imp' then
+                return 1
+            end
+        end
+        return 0
+    ");
+	
+	CustomFunctions.Add("IsPetAlive", @"
+    if UnitExists('pet') and not UnitIsDead('pet') then
+        return 1;
+    else
+        return 0;
+    end
+	");
+	
+	CustomFunctions.Add("IsTargetTargetingMe", @"
+    return UnitIsUnit('targettarget', 'player') and 1 or 0
+	");
+
+	CustomFunctions.Add("TargetIsCasting", "return UnitCastingInfo('target') ~= nil and 1 or 0");
+	CustomFunctions.Add("TargetIsInterruptible", @"
+        local name, _, _, _, _, _, _, notInterruptible = UnitCastingInfo('target')
+        return not notInterruptible and 1 or 0
+    ");
+
+	CustomFunctions.Add("IsPetFelhunter", @"
+        if UnitExists('pet') then
+            local petType = UnitCreatureFamily('pet')
+            if petType == 'Felhunter' then
+                return 1
+            end
+        end
+        return 0
+    ");
+	
+	CustomFunctions.Add("IsPetVoidwalker", @"
+        if UnitExists('pet') then
+            local petType = UnitCreatureFamily('pet')
+            if petType == 'Voidwalker' then
+                return 1
+            end
+        end
+        return 0
+    ");
+	
+	CustomFunctions.Add("IsPetAlive", @"
+		if not IsMounted() and not UnitIsDeadOrGhost('player') then
+			if UnitExists('pet') then
+				return 1; -- Pet exists
+			else
+				return 0; -- No pet
+			end
+		end
+		return 0; -- Default to no pet in other cases
+	");
+		
+	CustomFunctions.Add("IsTargetMelee", @"
+    local _, classFilename = UnitClass('target')
+    return (classFilename == 'ROGUE' or classFilename == 'DRUID' or classFilename == 'PALADIN' or classFilename == 'WARRIOR') and 1 or 0
+	");
+	CustomFunctions.Add("IsTargetShadowDamage", @"
+    local _, classFilename = UnitClass('target')
+    return (classFilename == 'WARLOCK' or classFilename == 'PRIEST') and 1 or 0
+	");
+	CustomFunctions.Add("IsTargetTargetingMe", @"
+		return UnitIsUnit('targettarget', 'player') and 1 or 0
+	");
+	CustomFunctions.Add("IsTargetPlayer", @"
+		return UnitIsPlayer('target') and 1 or 0
+	");
+	
+	CustomFunctions.Add("IsSacrificeReady", @"
+		if UnitExists('pet') then
+			local spellName = 'Sacrifice'
+			local isUsable, notEnoughMana = IsUsableSpell(spellName)
+			if isUsable and not notEnoughMana then
+				return 1
+			end
+		end
+		return 0
+	");
+
+	CustomFunctions.Add("IsSpellLockReady", @"
+		if UnitExists('pet') then
+			local spellName = 'Spell Lock'
+			local isUsable, notEnoughMana = IsUsableSpell(spellName)
+			if isUsable and not notEnoughMana then
+				return 1
+			end
+		end
+		return 0
+	");
+	
+	CustomFunctions.Add("IsHealthstoneReady", @"
+		local itemName = 'Healthstone'
+		for bag = 0,4 do 
+			for slot = 1, GetContainerNumSlots(bag) do 
+				local name = GetItemInfo(GetContainerItemLink(bag,slot) or '')
+				if name == itemName then
+					local start, duration, enable = GetContainerItemCooldown(bag, slot)
+					if duration == 0 then
+						return 1
+					end
+				end
+			end
+		end
+		return 0
+	");
+
+	// CustomFunctions.Add("IsScorchTarget", @"
+    // if UnitExists('target') then
+        // local guid = UnitGUID('target')
+        // local _, _, _, _, _, npcId = strsplit('-', guid)
+        // npcId = tonumber(npcId)
+        // -- List of NPC IDs for Incendiary Bomb, Frost Bomb, Radioactive Bomb, etc.
+        // local validNpcIds = {219110, 219111, 219112, 2635} -- Replace with actual NPC IDs
+        // for _, id in ipairs(validNpcIds) do
+            // if npcId == id then
+                // return 1
+            // end
+        // end
+    // end
+    // return 0
+// ");
+
+// CustomFunctions.Add("IsScorchTarget", @"
+    // if UnitExists('target') then
+        // local guid = UnitGUID('target')
+        // local _, _, _, _, _, npcId = strsplit('-', guid)
+        // npcId = tonumber(npcId)
+        // local validNpcIds = {219110, 219111, 219112, 671} -- Example NPC IDs for Incendiary Bomb, Frost Bomb, Radioactive Bomb
+        // for _, id in ipairs(validNpcIds) do
+            // if npcId == id then
+                // return 1
+            // end
+        // end
+    // end
+    // return 0
+// ");
+
+
+
+}
+
+private void AddSpellCheckFunction(string functionName, params string[] args)
+{
+    string luaScript;
+    if (args.Length > 1)
+    {
+        luaScript = string.Format(@"
+            local classification = UnitClassification('target')
+            return (classification == '{0}' or classification == '{1}') and 1 or 0
+        ", args[0], args[1]);
+    }
+    else
+    {
+        luaScript = string.Format(@"
+            for i = 1, 40 do
+                if UnitDebuff('mouseover', i) == GetSpellInfo({0}) then return 1 end
+            end
+            return 0
+        ", args[0]);
+    }
+
+    CustomFunctions.Add(functionName, luaScript);
+}
+
+public override void LoadSettings()
+{
+    Settings.Add(new Setting("Game Client Language", new List<string> { "English" }, "English"));
+}
+
+public override void Initialize()
+{
+    Aimsharp.PrintMessage("Hardcore Classic Warlock", Color.Purple);
+    Aimsharp.PrintMessage("Version 1.0 (WoW HC Classic)", Color.Purple);
+
+    // Define Warlock-specific macros
+    var macros = new Dictionary<string, string>
+    {
+        {"Stopcast", "/stopcasting"},
+        {"AutoAttack", "/startattack"},
+        {"StartWanding", "/castsequence !Shoot, !Shoot"},
+        {"PetAttack", "/petattack"},
+		{"FireboltMacro", "/cast !Firebolt"},
+        {"CorruptMO", "/cast [@mouseover, harm, nodead] Corruption"},
+        {"CoAMO", "/cast [@mouseover, harm, nodead] Curse of Agony"},
+        {"FearMO", "/cast [target=mouseover,exists,harm] Fear; Fear"},
+		{"SiphonMO", "/cast [@mouseover, harm, nodead] Siphon Life"},
+        {"StopWanding", "/stopcasting"},
+        {"Draino", "/cast [@target, harm, nodead] Drain Life"},
+		{"DrainSoulR1", "/cast [@target, harm, nodead] Drain Soul(Rank 1)"},
+		{"LakeofFireMacro", "/cast [@cursor] Rain of Fire(Rank 1)\\n/cast [group:raid, @cursor] Solid Dynamite"},
+		{"LakeofFirePlayerMacro", "/cast [@player] Rain of Fire(Rank 1)\\n/cast [group:raid, @player] Solid Dynamite"},
+		{"SpellLockMacro", "/cast Spell Lock"},
+		{"DemonicSacrificeMacro", "/cast Demonic Sacrifice\\n/cast Sacrifice"},
+		{"SoulLinkMacro", "/cast Soul Link"},
+		{"SacrificeMacro", "/cast Sacrifice"},
+		{"HealthstoneMacro", "/use Healthstone"},
+		{"ExhaustionMacro", "/cast Amplify Curse\\n/cast Curse of Exhaustion"},
+		
+		// {"CurseOfAgonyMacro", "/cast [@target, harm, nodead] Curse of Agony\\n/cast !Firebolt"},
+		// {"CorruptionMacro", "/cast [@target, harm, nodead] Corruption\\n/cast !Firebolt"},
+		// {"CurseOfRecklessnessMacro", "/cast [@target, harm, nodead] Curse of Recklessness\\n/cast !Firebolt"},
+		// {"ChaosBoltMacro", "/cast [@target, harm, nodead] Chaos Bolt\\n/cast !Firebolt"},
+		// {"IncinerateMacro", "/cast [@target, harm, nodead] Incinerate\\n/cast !Firebolt"},
+		// {"LifeTapMacro", "/cast Life Tap\\n/cast !Firebolt"},
+		// {"WandMacro", "/castsequence !Shoot, !Shoot\\n/cast !Firebolt"},
+		// {"ShadowburnMacro", "/cast [@target, harm, nodead] Shadowburn\\n/cast !Firebolt"},
+		
+
+	};
+	
+	CustomCommands.Add("WandingOn");
+	CustomCommands.Add("PetAttackOff");
+	CustomCommands.Add("DrainOn");
+	CustomCommands.Add("PvPOn");
+	CustomCommands.Add("Destro");
+	CustomCommands.Add("FearOn");
+	CustomCommands.Add("BanishOn");
+	CustomCommands.Add("HellfireOn");
+	
+	Items.Add("Healthstone");
+
+    foreach (var macro in macros)
+    {
+        Macros.Add(macro.Key, macro.Value);
+    }
+
+    InitializeCustomLUAFunctions();
+    gcdTimer.Start();
+    debugTimer.Start();
+
+    var items = new List<string> { "Healthstone", "Soul Shard" };
+    foreach (var item in items)
+    {
+        Items.Add(item);
+    }
+
+    AddToCollection(Spellbook, SpellsList);
+    AddToCollection(Buffs, BuffsList);
+    AddToCollection(Buffs, GeneralBuffsList);
+    AddToCollection(Debuffs, DebuffsList);
+    AddToCollection(CustomCommands, CustomCommandsList);
+}
+
+
+private void AddToCollection(ICollection<string> collection, IEnumerable<string> items)
+{
+    foreach (var item in items)
+    {
+        collection.Add(item);
+    }
+}
+
+public override bool CombatTick()
+{
+    bool FearOn = Aimsharp.IsCustomCodeOn("FearOn");
+	bool BanishOn = Aimsharp.IsCustomCodeOn("BanishOn");
+	bool isHellfireOn = Aimsharp.IsCustomCodeOn("HellfireOn");
+	bool DestroRota = Aimsharp.IsCustomCodeOn("Destro");
+	bool AfflicRota = Aimsharp.IsCustomCodeOn("AfflicOn");
+	bool isTankRota = Aimsharp.IsCustomCodeOn("TankRota");
+	
+
+    if (FearOn)
+    {
+        return CastFearIfToggled();
+    }
+	
+	if (BanishOn)
+    {
+        return CastBanishIfToggled();
+    }
+	
+	if (isHellfireOn)
+    {
+        return ChannelHellfireIfToggled();
+    }
+
+    if (DestroRota)
+    {
+        return DestroRotation();
+    }
+
+    if (AfflicRota)
+    {
+        return AfflictionRotation();
+    }
+	
+	if (isTankRota)
+    {
+        return WarlockTankingRotation();
+    }
+	
+    // if (Aimsharp.HasBuff("Metamorphosis", "player"))
+    // {
+        // return PvPRotation();
+    // }
+    
+	return false;
+}
+
+private bool ChannelHellfireIfToggled()
+{
+    bool isHellfireOn = Aimsharp.IsCustomCodeOn("HellfireOn");
+	int playerCasting = Aimsharp.CastingID("player");
+
+    if (isHellfireOn && Aimsharp.CanCast("Hellfire", "target") && playerCasting != 1949)
+    {
+        Aimsharp.Cast("Hellfire");
+        return true;
+    }
+
+    return false;
+}
+
+private bool CastFearIfToggled()
+{
+    bool FearOn = Aimsharp.IsCustomCodeOn("FearOn");
+
+    if (FearOn && Aimsharp.CanCast("Fear", "target"))
+    {
+        Aimsharp.Cast("Fear");
+        return true;
+    }
+
+    return false;
+}
+
+private bool CastBanishIfToggled()
+{
+    bool BanishOn = Aimsharp.IsCustomCodeOn("BanishOn");
+
+    if (BanishOn && Aimsharp.CanCast("Banish", "target") && !Aimsharp.HasDebuff("Banish", "target") && Aimsharp.LastCast() != "Banish")
+    {
+        Aimsharp.Cast("Banish");
+        return true;
+    }
+
+    return false;
+}
+
+private bool AutoTaunt()
+{
+    bool TauntOn = Aimsharp.IsCustomCodeOn("AutoTaunt");
+	int isTargetTargetingMe = Aimsharp.CustomFunction("IsTargetTargetingMe");
+
+    if (TauntOn && Aimsharp.CanCast("Menace", "target") && Aimsharp.Range("target") <= 5 && isTargetTargetingMe == 0)
+    {
+        Aimsharp.Cast("Menace");
+        return true;
+    }
+	else if (TauntOn && Aimsharp.CanCast("Searing Pain", "target") && Aimsharp.Range("target") <= 30 && isTargetTargetingMe == 0 && Aimsharp.HasBuff("Incinerate", "player"))
+	{
+		Aimsharp.Cast("Searing Pain");
+        return true;
+    }
+    return false;
+}
+
+private bool WardShadowDamage()
+{
+    bool isTargetTargetingMe = Aimsharp.CustomFunction("IsTargetTargetingMe") == 1;
+	bool isTargetShadowDamage = Aimsharp.CustomFunction("IsTargetShadowDamage") == 1; 
+	bool isTargetPlayer = Aimsharp.CustomFunction("IsTargetPlayer") == 1; 
+
+    if (Aimsharp.CanCast("Shadow Ward", "target") && Aimsharp.Range("target") <= 35 && isTargetTargetingMe && isTargetShadowDamage && isTargetPlayer && !Aimsharp.HasBuff("Shadow Ward", "player"))
+    {
+        Aimsharp.Cast("Shadow Ward");
+        return true;
+    }
+	
+    return false;
+}
+
+private bool CastShadowBoltVolley()
+{
+    int enemiesNearTarget = Aimsharp.EnemiesNearTarget(); // Number of enemies within 30 yards of the target
+    bool isMoving = Aimsharp.PlayerIsMoving();
+	bool isVolley = Aimsharp.IsCustomCodeOn("VolleyOn");
+
+    // Check if there are 2 or more enemies within 30 yards of the target or in melee range
+    if (isVolley && !isMoving && Aimsharp.Range("target") <= 30)
+    {
+        // Cast Shadow Bolt Volley if conditions are met
+        Aimsharp.Cast("Shadow Bolt"); // Replace with your actual spell name or macro if different
+        return true;
+    }
+
+    return false;
+}
+
+private bool Buffing()
+{
+    int playerLevel = Aimsharp.GetPlayerLevel();
+    int playerMana = Aimsharp.Mana("player");
+    bool Wand = Aimsharp.IsCustomCodeOn("WandingOn");
+    bool PvP = Aimsharp.IsCustomCodeOn("PvPOn");
+    bool hasDemonArmor = Aimsharp.HasBuff("Demon Armor", "player");
+	int playerCasting = Aimsharp.CastingID("player");
+	bool isDraining = (playerCasting == 8288 || playerCasting == 1120);
+	bool DemonicSac = Aimsharp.HasBuff("Fel Stamina", "player") || Aimsharp.HasBuff("Fel Energy", "player") || Aimsharp.HasBuff("Touch of Shadow", "player") || Aimsharp.HasBuff("Burning Wish", "player");
+	bool isPetAlive = Aimsharp.CustomFunction("IsPetAlive") == 1;
+	// bool isPetActive = Aimsharp.PlayerHasPet();
+    bool isPetVoidwalker = Aimsharp.CustomFunction("IsPetVoidwalker") == 1;
+    bool isPetFelhunter = Aimsharp.CustomFunction("IsPetFelhunter") == 1;
+    bool sacrificeReady = Aimsharp.CustomFunction("IsSacrificeReady") == 1;
+    bool spellLockReady = Aimsharp.CustomFunction("IsSpellLockReady") == 1;
+	bool isHealthstoneReady = Aimsharp.CustomFunction("IsHealthstoneReady") == 1;
+    int petHealth = Aimsharp.Health("pet");
+	
+	if (isDraining || Aimsharp.LastCast() == "Drain Soul") return false;
+	
+	if (isPetAlive && Aimsharp.Health("player") < 20 && isPetVoidwalker && !Aimsharp.HasBuff("Sacrifice", "player") && Aimsharp.LastCast() != "Sacrifice")
+    {
+        Aimsharp.Cast("SacrificeMacro");
+        return true;
+    }
+    if (isPetAlive && petHealth < 20 && isPetVoidwalker && !Aimsharp.HasBuff("Sacrifice", "player") && Aimsharp.LastCast() != "Sacrifice")
+    {
+        Aimsharp.Cast("SacrificeMacro");
+        return true;
+    }
+  
+	if (isHealthstoneReady && Aimsharp.Health("player") < 35)
+    {
+        Aimsharp.Cast("HealthstoneMacro");
+        return true;
+    }
+	if (Aimsharp.CanCast("Demonic Grace", "player") && Aimsharp.Health("player") < 85 && !Wand)
+	{
+		Aimsharp.Cast("Demonic Grace");
+        return true;
+    }
+	if (Aimsharp.CanCast("Demonic Sacrifice") && Aimsharp.Health("pet") <= 20 && isPetAlive && Aimsharp.LastCast() != "Demonic Sacrifice" && !DemonicSac)
+    {
+        Aimsharp.Cast("DemonicSacrificeMacro");
+        return true;
+    }
+    // Demon Skin/Demon Armor
+	if (Aimsharp.CanCast("Soul Link", "player") && !Aimsharp.HasBuff("Soul Link", "player") && Aimsharp.HasBuff("Master Demonologist", "player"))
+    {
+        Aimsharp.Cast("Soul Link");
+        return true;
+    }
+    if (!Aimsharp.HasBuff("Demon Skin", "player") && Aimsharp.CanCast("Demon Skin") && playerLevel < 20 && !Wand)
+    {
+        Aimsharp.Cast("Demon Skin");
+        return true;
+    }
+    if (!hasDemonArmor && Aimsharp.CanCast("Demon Armor") && playerLevel >= 20 && !Wand && playerMana > 30)
+    {
+        Aimsharp.Cast("Demon Armor");
+        return true;
+    }
+
+    // Life Tap for mana management
+    if (Aimsharp.CanCast("Life Tap", "player") && Aimsharp.Health("player") > 90 && playerMana < 35 && Aimsharp.LastCast() != "Life Tap" && !Wand && (Aimsharp.PlayerIsMoving() || !PvP))
+    {
+        Aimsharp.Cast("Life Tap");
+        return true;
+    }
+
+    return false;
+}
+
+private bool DestroRotation()
+{
+    bool isMoving = Aimsharp.PlayerIsMoving();
+	int playerCasting = Aimsharp.CastingID("player");
+	bool isPlayerChanneling = Aimsharp.IsChanneling("player");
+	bool Drain = Aimsharp.IsCustomCodeOn("DrainOn");
+    int playerMana = Aimsharp.Mana("player");
+    int playerHealth = Aimsharp.Health("player");
+	bool HasShadowTrance = Aimsharp.HasBuff("Shadow Trance", "player");
+	bool hasdots = Aimsharp.HasDebuff("Corruption", "target") && Aimsharp.HasDebuff("Curse of Agony", "target");
+	int targetHealth = Aimsharp.Health("target");
+    bool Wand = Aimsharp.IsCustomCodeOn("WandingOn");
+	int playerChannelingID = Aimsharp.CastingID("player");
+	int isWandEquipped = Aimsharp.CustomFunction("IsWandEquipped");
+	int isWanding = Aimsharp.CustomFunction("IsWanding");
+	int ChaosBoltCooldown = Aimsharp.SpellCooldown("Chaos Bolt");
+	int isTargetPlayer = Aimsharp.CustomFunction("IsTargetPlayer");
+	bool PvP = Aimsharp.IsCustomCodeOn("PvPOn");
+	bool CoROn = Aimsharp.IsCustomCodeOn("CoR");
+	int incinerateSpellId = 412758; 
+	int chaosBoltCooldown = Aimsharp.SpellCooldown("Chaos Bolt");
+    bool hasIncinerateBuff = Aimsharp.HasBuff("Incinerate", "player");
+	bool PetAttackOff = Aimsharp.IsCustomCodeOn("PetAttackOff");
+	int drainSoulRemaining = Aimsharp.CastingRemaining("player");
+	bool LoFire = Aimsharp.IsCustomCodeOn("LoF");
+	bool CoEOn = Aimsharp.IsCustomCodeOn("CoE");
+	
+	// if (CastScorchOnSpecificTargets()) return true;
+	if (WandBecauseOom()) return true;
+    if (CastDrainOrShadowburn()) return true;
+    if (ControlImpFirebolt()) return true;
+    if (AttackTotemWithWand()) return true;
+    if (CastFearOnMouseover()) return true;
+    if (ControlPet()) return true;
+	if (AttemptToKick()) return true;
+	if (WardShadowDamage()) return true;
+	
+    if (Drain && targetHealth < 30 && (playerCasting == 8288 || playerCasting == 1120))
+	{
+		return false;
+	}
+	
+	if (Buffing()) return true;
+	
+    if (playerMana < 10 && isWanding == 0 && !isMoving && Aimsharp.Range("target") <= 30 && Aimsharp.CanCast("Shoot", "target") && !isPlayerChanneling && isWandEquipped == 1)
+    {
+        Aimsharp.Cast("StartWanding");
+        return true;
+    }
+
+    if (CastShadowBoltVolley())
+    {
+        return true;
+    }
+
+    if (CastRainOfFire())
+    {
+        return true;
+    }
+	
+	if (Aimsharp.CanCast("Drain Life") && !LoFire && Aimsharp.Range("target") <= 20 && PvP)
+    {
+        Aimsharp.Cast("Draino");
+        return true;
+    }
+	
+    if (Aimsharp.CanCast("Curse of Recklessness", "target") && CoROn && !CoEOn && !Aimsharp.HasDebuff("Curse of Recklessness", "target") && playerMana >= 10 && Aimsharp.LastCast() != "Curse of Recklessness" && isTargetPlayer == 0)
+    {
+        Aimsharp.Cast("Curse of Recklessness");
+        return true;
+    }
+	 if (Aimsharp.CanCast("Curse of the Elements", "target") && CoEOn && !CoROn && !Aimsharp.HasDebuff("Curse of the Elements", "target") && playerMana >= 10 && Aimsharp.LastCast() != "Curse of the Elements" && isTargetPlayer == 0)
+    {
+        Aimsharp.Cast("Curse of the Elements");
+        return true;
+    }
+
+    if (CastImmolate())
+    {
+        return true;
+    }
+	
+	// if (Aimsharp.CanCast("Corruption", "target") && !Aimsharp.HasDebuff("Corruption", "target") && playerMana >= 10 && isMoving && Aimsharp.LastCast() != "Corruption" && targetHealth > 10 && !LoFire)
+    // {
+        // Aimsharp.Cast("Corruption");
+        // return true;
+    // }
+	
+    // if (Aimsharp.CanCast("Curse of Agony", "target") && (!CoROn || !CoEOn || isTargetPlayer == 1) && !Aimsharp.HasDebuff("Curse of Agony", "target") && playerMana >= 10 && isMoving && Aimsharp.LastCast() != "Curse of Agony" && targetHealth > 10)
+    // {
+        // Aimsharp.Cast("Curse of Agony");
+        // return true;
+    // }
+    
+    if (playerHealth > 40 && playerMana < 70 && Aimsharp.CanCast("Life Tap") && isMoving)
+    {
+        Aimsharp.Cast("Life Tap");
+		return true;
+    }
+
+    if (playerCasting == incinerateSpellId)
+    {
+        return false; 
+    }
+
+    if (Aimsharp.CanCast("Chaos Bolt", "target") && hasIncinerateBuff && !isMoving && playerMana >= 10)
+    {
+        Aimsharp.Cast("Chaos Bolt");
+        return true;
+    }
+
+    if (Aimsharp.CanCast("Incinerate", "target") && !isMoving && playerMana >= 10 && (!hasIncinerateBuff || chaosBoltCooldown > 1500))
+    {
+       Aimsharp.Cast("Incinerate");
+       return true;
+    }
+
+    
+	
+	return false;
+}
+
+private bool AfflictionRotation()
+{
+    int playerLevel = Aimsharp.GetPlayerLevel();
+    bool isMoving = Aimsharp.PlayerIsMoving();
+    int targetHealth = Aimsharp.Health("target");
+    bool hasDemonArmor = Aimsharp.HasBuff("Demon Armor", "player");
+    int playerMana = Aimsharp.Mana("player");
+    bool Wand = Aimsharp.IsCustomCodeOn("WandingOn");
+    bool Drain = Aimsharp.IsCustomCodeOn("DrainOn");
+    int playerCasting = Aimsharp.CastingID("player");
+    int drainSoulRemaining = Aimsharp.CastingRemaining("player");
+    bool isTargetElite = Aimsharp.CustomFunction("IsTargetElite") == 1;
+    bool HasShadowTrance = Aimsharp.HasBuff("Shadow Trance", "player");
+	bool PvP = Aimsharp.IsCustomCodeOn("PvPOn");
+	int isWanding = Aimsharp.CustomFunction("IsWanding");
+    int WorldPingAverage = 222;
+	bool hasdots = (Aimsharp.HasDebuff("Corruption", "target") && Aimsharp.HasDebuff("Curse of Agony", "target") && Aimsharp.HasDebuff("Drain Life", "target") && Aimsharp.HasDebuff("Haunt", "target") && Aimsharp.HasDebuff("Siphon Life", "target") || Aimsharp.HasDebuff("Corruption", "target") && Aimsharp.HasDebuff("Curse of Agony", "target") && !Aimsharp.CanCast("Haunt", "target") && Aimsharp.HasDebuff("Siphon Life", "target")  && !Aimsharp.CanCast("Drain Life", "target"));
+	int isWandEquipped = Aimsharp.CustomFunction("IsWandEquipped");
+    
+	// if (CastScorchOnSpecificTargets()) return true;
+	if (CastDrainOrShadowburn()) return true;
+	if (Buffing()) return true;
+	if (WandBecauseOom()) return true;
+    if (AttackTotemWithWand()) return true;
+    if (CastFearOnMouseover()) return true;
+	if (CastShadowBoltVolley()) return true;
+    if (ControlPet()) return true;
+	if (AttemptToKick()) return true;
+	if (WardShadowDamage()) return true;
+   
+
+    // Special conditions
+    if (playerCasting == 0 && !Aimsharp.IsChanneling("player") && !Aimsharp.HasBuff("Metamorphosis", "player"))
+    {
+        // Shadow Bolt with Shadow Trance
+        if (Aimsharp.CanCast("Shadow Bolt") && HasShadowTrance)
+        {
+            Aimsharp.Cast("Shadow Bolt");
+            return true;
+        }
+		
+		// if (HandleWanding(isWanding, isMoving, WorldPingAverage))
+            // return true; 
+		
+        if (ApplyDoTsTest(targetHealth, isTargetElite))
+            return true;
+		
+		}
+    return false;
+}
+
+private bool CastScorchOnSpecificTargets()
+{
+    // Check if the current target is one of the specific mobs
+    bool isSpecificTarget = Aimsharp.CustomFunction("IsScorchTarget") == 1;
+
+    // If the target is one of the specific mobs, attempt to cast Scorch
+    if (isSpecificTarget && Aimsharp.CanCast("Scorch"))
+    {
+        Aimsharp.Cast("Scorch");
+        return true;
+    }
+
+    return false;
+}
+
+
+private bool WandBecauseOom()
+{
+	int playerMana = Aimsharp.Mana("player");
+	bool isMoving = Aimsharp.PlayerIsMoving();
+	bool Drain = Aimsharp.IsCustomCodeOn("DrainOn");
+	int targetHealth = Aimsharp.Health("target");
+	int isWanding = Aimsharp.CustomFunction("isWanding");
+	
+	if (isWanding == 0 && playerMana < 5 && !isMoving && Aimsharp.Range("target") <= 30 && Aimsharp.CanCast("Shoot", "target") && Aimsharp.CustomFunction("IsWandEquipped") == 1 && (!Drain && targetHealth <= 20))
+        {
+            Aimsharp.Cast("StartWanding");
+            return true;
+        }
+	
+	return false;
+}
+
+private bool CastDrainOrShadowburn()
+{
+    bool Drain = Aimsharp.IsCustomCodeOn("DrainOn");
+    int targetHealth = Aimsharp.Health("target");
+    int playerMana = Aimsharp.Mana("player");
+    bool isMoving = Aimsharp.PlayerIsMoving();
+    int playerCasting = Aimsharp.CastingID("player");
+    int drainSoulRemaining = Aimsharp.CastingRemaining("player");
+    bool PetAttackOff = Aimsharp.IsCustomCodeOn("PetAttackOff");
+	bool DestroRota = Aimsharp.IsCustomCodeOn("Destro");
+	bool AfflicRota = Aimsharp.IsCustomCodeOn("AfflicOn");
+	bool isVolley = Aimsharp.IsCustomCodeOn("VolleyOn");
+	bool isTankRota = Aimsharp.IsCustomCodeOn("TankRota");
+	bool hasdots = (Aimsharp.HasDebuff("Corruption", "target") && (Aimsharp.HasDebuff("Curse of Agony", "target") ||  Aimsharp.HasDebuff("Curse of Exhaustion", "target")) && Aimsharp.HasDebuff("Drain Life", "target") && Aimsharp.HasDebuff("Haunt", "target") && Aimsharp.HasDebuff("Siphon Life", "target") || Aimsharp.HasDebuff("Corruption", "target") && (Aimsharp.HasDebuff("Curse of Agony", "target") ||  Aimsharp.HasDebuff("Curse of Exhaustion", "target")) && !Aimsharp.CanCast("Haunt", "target") && Aimsharp.HasDebuff("Siphon Life", "target")  && !Aimsharp.CanCast("Drain Life", "target"));
+	int isWanding = Aimsharp.CustomFunction("IsWanding");
+	int isTargetPlayer = Aimsharp.CustomFunction("IsTargetPlayer");
+
+    // Logic for casting Drain Soul under specific conditions
+    if (Drain)
+    {
+        if (Aimsharp.CanCast("Drain Soul", "target") && !isMoving && 
+            (drainSoulRemaining < 600 || drainSoulRemaining == 0) && playerMana > 5 && !AfflicRota && 
+            (playerCasting != 5782 || playerCasting != 1120) && 
+            ((targetHealth <= 15 && playerCasting != 0) || (targetHealth <= 20 && playerCasting == 0)))
+        {
+            Aimsharp.Cast("DrainSoulR1");
+            return true;
+        }
+		if (Aimsharp.CanCast("Drain Soul", "target") && !isMoving && (drainSoulRemaining < 600 || drainSoulRemaining == 0) && playerMana > 5 && AfflicRota && !DestroRota && (playerCasting != 5782 || playerCasting != 1120) && (hasdots || targetHealth <= 20) && isTargetPlayer == 1)
+        {
+            Aimsharp.Cast("Drain Soul");
+            return true;
+        }
+		if (Aimsharp.CanCast("Drain Soul", "target") && !isMoving && (drainSoulRemaining < 600 || drainSoulRemaining == 0) && playerMana > 5 && AfflicRota && !DestroRota && (playerCasting != 5782 || playerCasting != 1120) && (hasdots || targetHealth <= 20) && isTargetPlayer == 0)
+        {
+            Aimsharp.Cast("DrainSoulR1");
+            return true;
+        }
+		
+	
+    }
+	if (!Drain && AfflicRota)
+	{
+		if (isWanding == 0 && !isMoving && Aimsharp.Range("target") <= 30 && hasdots && Aimsharp.CanCast("Shoot", "target") && (playerCasting != 1120 || playerCasting != 5782))
+		{
+			Aimsharp.Cast("StartWanding");
+			return true;
+		}
+	}
+    else // Logic for casting Shadowburn under specific conditions
+    {
+        if (Aimsharp.CanCast("Shadowburn", "target") && targetHealth <= 20 && (DestroRota || isTankRota) && !isVolley)
+        {
+            Aimsharp.Cast("Shadowburn");
+            return true;
+        }
+    }
+    return false;
+}
+
+private bool AttackTotemWithWand()
+{
+    bool isTargetTotem = Aimsharp.CustomFunction("IsTargetTotem") == 1;
+    bool isWanding = Aimsharp.CustomFunction("IsWanding") == 1;
+
+    if (isTargetTotem && !isWanding && Aimsharp.CanCast("Shoot", "target"))
+    {
+        Aimsharp.Cast("StartWanding"); // Replace "Wand" with your wand attack command
+        return true;
+    }
+
+    return false;
+}
+
+private bool CastRainOfFire()
+{
+    int debuffRemainingOnTarget = Aimsharp.DebuffRemaining("Lake of Fire", "target");
+	bool isMoving = Aimsharp.PlayerIsMoving();
+    int playerMana = Aimsharp.Mana("player");
+	int playerCasting = Aimsharp.CastingID("player");
+	bool mouseoverIsEnemy = Aimsharp.CustomFunction("IsMouseoverEnemy") == 1;
+	bool LoFire = Aimsharp.IsCustomCodeOn("LoF");
+
+      // Stop channeling Rain of Fire if it's been channeled for about 0.4 seconds
+    if (Aimsharp.HasDebuff("Lake of Fire", "target") && playerCasting == 5740)
+    {
+        Aimsharp.Cast("Stopcast");
+        return true;
+    }
+    if (LoFire && mouseoverIsEnemy && !isMoving && playerMana > 20 && (!Aimsharp.HasDebuff("Lake of Fire", "target") || debuffRemainingOnTarget < 1000) && Aimsharp.Health("target") > 0 && Aimsharp.TargetIsEnemy())
+    {
+        Aimsharp.Cast("LakeofFireMacro");
+        return true;
+    }
+
+    return false;
+}
+
+private bool CastRainOfFireOnPlayer()
+{
+    int debuffRemainingOnTarget = Aimsharp.DebuffRemaining("Lake of Fire", "target");
+	bool isMoving = Aimsharp.PlayerIsMoving();
+    int playerMana = Aimsharp.Mana("player");
+	int playerCasting = Aimsharp.CastingID("player");
+	bool mouseoverIsEnemy = Aimsharp.CustomFunction("IsMouseoverEnemy") == 1;
+	bool LoFire = Aimsharp.IsCustomCodeOn("LoF");
+	int targetCount = Aimsharp.EnemiesInMelee();
+
+      // Stop channeling Rain of Fire if it's been channeled for about 0.4 seconds
+    if (Aimsharp.HasDebuff("Lake of Fire", "target") && playerCasting == 5740)
+    {
+        Aimsharp.Cast("Stopcast");
+        return true;
+    }
+    if (LoFire && !isMoving && playerMana > 20 && (!Aimsharp.HasDebuff("Lake of Fire", "target") || debuffRemainingOnTarget < 1000) && Aimsharp.Health("target") > 0 && Aimsharp.TargetIsEnemy() && Aimsharp.Range("target") <= 5 && (Aimsharp.HasBuff("Incinerate", "player") || targetCount >= 2))
+    {
+        Aimsharp.Cast("LakeofFirePlayerMacro");
+        return true;
+    }
+
+    return false;
+}
+
+private bool WarlockTankingRotation()
+{
+    bool isMoving = Aimsharp.PlayerIsMoving();
+    int playerMana = Aimsharp.Mana("player");
+    bool hasIncinerateBuff = Aimsharp.HasBuff("Incinerate", "player");
+    int lakeOfFireDebuffRemaining = Aimsharp.DebuffRemaining("Lake of Fire", "target");
+    bool isPetAlive = Aimsharp.CustomFunction("IsPetAlive") == 1;
+    bool isMetamorphosisActive = Aimsharp.HasBuff("Metamorphosis", "player");
+    int searingPainCooldown = Aimsharp.SpellCooldown("Searing Pain");
+    int shadowCleaveCooldown = Aimsharp.SpellCooldown("Shadow Cleave");
+    int demonicGraceCooldown = Aimsharp.SpellCooldown("Demonic Grace");
+    int lifeTapHealth = Aimsharp.Health("player");
+    bool canLifeTap = lifeTapHealth > 50; // Adjust as needed
+    int targetCount = Aimsharp.EnemiesInMelee(); // Adjust method as needed to get the correct count
+	int playerCasting = Aimsharp.CastingID("player");
+	bool CoROn = Aimsharp.IsCustomCodeOn("CoR");
+	int targetHealth = Aimsharp.Health("target");
+	bool LoFire = Aimsharp.IsCustomCodeOn("LoF");
+	
+	 if (CastDrainOrShadowburn()) return true;
+    
+	if (playerCasting == 1949 || playerCasting == 1120)
+        return false;
+	
+	if (AutoTaunt()) return true;
+	
+	// Shadow Cleave for AoE threat
+    if (targetCount >= 2 && Aimsharp.CanCast("Shadow Cleave") && isMetamorphosisActive && Aimsharp.Range("target") <= 5)
+    {
+        Aimsharp.Cast("Shadow Cleave");
+        return true;
+    }
+	
+	if (Aimsharp.CanCast("Life Tap", "player") && Aimsharp.Health("player") > 95 && playerMana < 45 && Aimsharp.LastCast() != "Life Tap")
+    {
+        Aimsharp.Cast("Life Tap");
+        return true;
+    }
+	
+    if (CastRainOfFireOnPlayer()) return true;
+	if (Buffing()) return true;
+	if (WandBecauseOom()) return true;
+   
+    if (AttackTotemWithWand()) return true;
+    if (CastFearOnMouseover()) return true;
+    if (ControlPet()) return true;
+	
+	if (Aimsharp.CanCast("Drain Life") && !LoFire && Aimsharp.Range("target") <= 20)
+    {
+        Aimsharp.Cast("Draino");
+        return true;
+    }
+	
+    if (Aimsharp.CanCast("Incinerate") && !isMoving && (!hasIncinerateBuff || Aimsharp.BuffRemaining("Incinerate", "player") < 3000) && playerCasting != 412758 && Aimsharp.LastCast() != "Incinerate" && (targetCount < 2 || Aimsharp.HasDebuff("Lake of Fire", "target") && LoFire))
+    {
+        Aimsharp.Cast("Incinerate");
+        return true;
+    }
+	
+	// if (Aimsharp.CanCast("Corruption") && !Aimsharp.HasDebuff("Corruption", "target") && Aimsharp.LastCast() != "Corruption" && targetHealth > 40 && targetCount < 2)
+    // {
+        // Aimsharp.Cast("Corruption");
+        // return true;
+    // }
+
+    // if (Aimsharp.CanCast("Curse of Agony") && isMoving && !CoROn && playerMana >= 10 && !Aimsharp.HasDebuff("Curse of Agony", "target") && Aimsharp.LastCast() != "Curse of Agony" && targetHealth > 40 && targetCount < 2)
+    // {
+        // Aimsharp.Cast("Curse of Agony");
+        // return true;
+    // }
+	
+	// if (Aimsharp.CanCast("Curse of Recklessness", "target") && isMoving && CoROn && !Aimsharp.HasDebuff("Curse of Recklessness", "target") && playerMana >= 10 && Aimsharp.LastCast() != "Curse of Recklessness" && targetHealth > 40 && targetCount < 2)
+    // {
+        // Aimsharp.Cast("Curse of Recklessness");
+        // return true;
+    // }
+	
+	if (Aimsharp.CanCast("Searing Pain"))
+    {
+        Aimsharp.Cast("Searing Pain");
+        return true;
+    }
+	
+	if (Aimsharp.CanCast("Immolate") && !isMoving && !Aimsharp.HasDebuff("Immolate", "target") && playerCasting != 11665 && Aimsharp.LastCast() != "Immolate" && targetHealth > 40 && targetCount < 2 && Aimsharp.Range("target") > 5)
+    {
+        Aimsharp.Cast("Immolate");
+        return true;
+    }
+
+	 // Searing Pain as primary threat generator
+    if (Aimsharp.CanCast("Searing Pain"))
+    {
+        Aimsharp.Cast("Searing Pain");
+        return true;
+    }
+	
+    return false;
+}
+
+
+private int GetPetToTargetRange()
+{
+    return Math.Abs(Aimsharp.Range("target") - Aimsharp.Range("pet"));
+}
+
+private bool isCastingFirebolt = false;
+
+private bool ControlImpFirebolt()
+{
+	bool isPetAnImp = Aimsharp.CustomFunction("IsPetAnImp") == 1;
+	bool isPetAlive = Aimsharp.CustomFunction("IsPetAlive") == 1;
+	bool isPetActive = Aimsharp.PlayerHasPet();
+	bool PetAttackOff = Aimsharp.IsCustomCodeOn("PetAttackOff");
+	
+    if (!isPetAnImp || !isPetActive || !Aimsharp.InCombat("pet") || Aimsharp.Mana("pet") <= 5 || Aimsharp.Range("target") >= 30 || PetAttackOff || !isPetAlive)
+    {
+        if (isCastingFirebolt)
+        {
+            Aimsharp.PrintMessage("Stopping Firebolt...", System.Drawing.Color.Red);
+            isCastingFirebolt = false;
+        }
+        return false;
+    }
+
+    if ((DateTime.Now - lastFireboltTime).TotalMilliseconds < 200)
+        return false;
+
+    if (!isCastingFirebolt)
+    {
+        Aimsharp.PrintMessage("Starting Firebolt...", System.Drawing.Color.Yellow);
+        isCastingFirebolt = true;
+    }
+
+    Aimsharp.Cast("FireboltMacro");
+    lastFireboltTime = DateTime.Now;
+    return true;
+}
+
+private bool CastImmolate()
+{
+    int playerMana = Aimsharp.Mana("player");
+    int playerCasting = Aimsharp.CastingID("player");
+    bool isMoving = Aimsharp.PlayerIsMoving();
+    int targetHealth = Aimsharp.Health("target");
+    int immolateRemaining = Aimsharp.DebuffRemaining("Immolate", "target");
+	bool immoOff = Aimsharp.IsCustomCodeOn("ImmoOff");
+
+    // Check if Immolate should be cast
+    if (Aimsharp.CanCast("Immolate", "target") && 
+        (immolateRemaining < 1600 || !Aimsharp.HasDebuff("Immolate", "target")) && // Check if Immolate is about to expire or not present
+        Aimsharp.HasBuff("Incinerate", "player") && 
+        playerMana >= 10 && 
+        !isMoving && 
+        playerCasting != 11665 && 
+        Aimsharp.LastCast() != "Immolate" && 
+        targetHealth > 20 && !immoOff)
+    {
+        Aimsharp.Cast("Immolate");
+        return true;
+    }
+
+    return false;
+}
+
+private bool CastDrainSoulIfAppropriate()
+{
+    int playerLevel = Aimsharp.GetPlayerLevel();
+    int targetHealth = Aimsharp.Health("target");
+    int soulShardCount = Aimsharp.CustomFunction("SoulShardCount");
+    bool isMoving = Aimsharp.PlayerIsMoving();
+    int playerHealth = Aimsharp.Health("player");
+    bool isWandActive = Aimsharp.CustomFunction("IsWanding") == 1;  // Assuming IsWanding returns 1 when active
+    int playerMana = Aimsharp.Mana("player");
+    int drainSoulRemaining = Aimsharp.CastingRemaining("player");
+	bool Drain = Aimsharp.IsCustomCodeOn("DrainOn");
+	int playerCasting = Aimsharp.CastingID("player");
+
+	//Bring Health Down Before Drain
+	
+    // Only cast Drain Soul if player level is at least 10, the player can cast it, and they are not moving
+    // Additionally, check if the remaining channel time of Drain Soul is less than 1000 milliseconds (1 second)
+	if (Drain)
+	{
+		// if (playerLevel >= 10 && Aimsharp.CanCast("Drain Soul", "target") && !isMoving && (drainSoulRemaining < 3000 || drainSoulRemaining == 0) && Drain && playerMana >= 40 && targetHealth < 60)
+		// {
+			// Aimsharp.Cast("Drain Soul");
+			// return true;
+		// }
+		if (Aimsharp.CanCast("Drain Soul", "target") && !isMoving && (drainSoulRemaining < 1500 || drainSoulRemaining == 0) && playerMana > 5 && targetHealth < 20)
+		{
+			Aimsharp.Cast("DrainSoulR1");
+			Aimsharp.Cast("Stopcast");
+			return true;
+		}
+		// if (Aimsharp.CanCast("Haunt") && !Aimsharp.HasDebuff("Haunt", "target") && playerMana > 10 && targetHealth < 50)
+			// {
+				// Aimsharp.Cast("Haunt");
+				// return true;
+			// }
+		// if (Aimsharp.CanCast("Immolate", "target") && !Aimsharp.HasDebuff("Immolate", "target") && playerMana >= 10 && !isMoving && playerCasting != 1094 && Aimsharp.LastCast() != "Immolate" && targetHealth >= 30)
+			// {
+				// Aimsharp.Cast("Immolate");
+				// return true;
+			// }
+		// if (Aimsharp.CanCast("Curse of Agony") && !Aimsharp.HasDebuff("Curse of Agony", "target") && Aimsharp.LastCast() != "Curse of Agony" && playerMana >= 10 && targetHealth >= 30)
+		// {
+			// Aimsharp.Cast("Curse of Agony");
+			// return true;
+		// }
+		// if (Aimsharp.CanCast("Drain Life", "target") && playerMana >= 10 && targetHealth >= 30 && Aimsharp.Range("target") <= 20)
+		// {
+			// Aimsharp.Cast("Draino");
+			// return true;
+		// }
+	// if (Aimsharp.CanCast("Shadow Bolt", "target") && targetHealth >= 40)
+		// {
+			// Aimsharp.Cast("Shadow Bolt");
+			// return true;
+		// }
+	}
+    return false;
+}
+
+private bool AttemptToKick()
+{
+    int targetIsCasting = Aimsharp.CustomFunction("TargetIsCasting");
+    int targetCastingSpellId = Aimsharp.CastingID("target");
+    int targetIsInterruptible = Aimsharp.CustomFunction("TargetIsInterruptible");
+    int kickCooldown = Aimsharp.SpellCooldown("Kick");
+    int playerEnergy = Aimsharp.Power("player");
+    int targetRange = Aimsharp.Range("target"); 
+    bool KickMode = Aimsharp.IsCustomCodeOn("KickOff");
+    int mindBlastSpellId = 425233;
+	bool IsPetFelhunter = Aimsharp.CustomFunction("IsPetFelhunter") == 1;
+	bool isPetVoidwalker = Aimsharp.CustomFunction("IsPetVoidwalker") == 1;
+    bool sacrificeReady = Aimsharp.CustomFunction("IsSacrificeReady") == 1;
+    bool spellLockReady = Aimsharp.CustomFunction("IsSpellLockReady") == 1;
+	bool isPetAlive = Aimsharp.CustomFunction("IsPetAlive") == 1;
+
+    // Check if the target is casting an interruptible spell and Kick is ready (or almost ready)
+    // Exclude Mind Blast from being interrupted
+    if (targetIsCasting == 1 && !KickMode && spellLockReady && IsPetFelhunter)
+    {
+        // If Kick is ready, use it
+        if (Aimsharp.CanCast("Spell Lock", "target"))
+        {
+            Aimsharp.Cast("SpellLockMacro");
+            return true;
+        }
+    }
+	
+	return false;
+}
+
+private bool ApplyDoTs(int targetHealth, bool isTargetElite)
+{
+	int petToTargetRange = GetPetToTargetRange();
+	int playerLevel = Aimsharp.GetPlayerLevel();
+	bool Wand = Aimsharp.IsCustomCodeOn("WandingOn");
+	int playerHealth = Aimsharp.Health("player");
+	int playerMana = Aimsharp.Mana("player");
+	bool PvP = Aimsharp.IsCustomCodeOn("PvPOn");
+	bool isMoving = Aimsharp.PlayerIsMoving();
+	bool NotFacing = Aimsharp.NotFacing();
+	bool CoEOn = Aimsharp.IsCustomCodeOn("CoE");
+	bool CoROn = Aimsharp.IsCustomCodeOn("CoR");
+	int isTargetPlayer = Aimsharp.CustomFunction("IsTargetPlayer");
+	
+	
+		ControlPet();
+		
+	
+		if (Aimsharp.CanCast("Drain Life", "target") && playerHealth < 80 && !Wand && (playerMana > 15 || targetHealth < 20) && Aimsharp.Range("target") <= 20)
+		{
+			Aimsharp.Cast("Draino");
+			return true;
+		}
+		if (Aimsharp.CanCast("Haunt") && !Aimsharp.HasDebuff("Haunt", "target") && !Wand && (playerMana > 15 || targetHealth < 20))
+		{
+			Aimsharp.Cast("Haunt");
+			return true;
+		}
+		if (Aimsharp.CanCast("Drain Life", "target") && !Wand && (playerMana > 15 || targetHealth < 20) && Aimsharp.Range("target") <= 20)
+		{
+			Aimsharp.Cast("Draino");
+			return true;
+		}
+		if (Aimsharp.CanCast("Corruption") && (targetHealth > 15 || isTargetElite) && !Aimsharp.HasDebuff("Corruption", "target") && !Wand && playerMana > 15 && (!CoEOn || !CoROn))
+		{
+			Aimsharp.Cast("Corruption");
+			return true;
+		}
+		
+		if (Aimsharp.CanCast("Curse of Agony") && (targetHealth > 15 || isTargetElite) && !Aimsharp.HasDebuff("Curse of Agony", "target") && Aimsharp.LastCast() != "Curse of Agony" && !Wand && playerMana > 7)
+		{
+			Aimsharp.Cast("Curse of Agony");
+			return true;
+		}
+		if (Aimsharp.CanCast("Curse of Recklessness", "target") && (targetHealth > 15 || isTargetElite) && CoROn && !CoEOn && !Aimsharp.HasDebuff("Curse of Recklessness", "target") && !Wand && playerMana > 7 && Aimsharp.LastCast() != "Curse of Recklessness" && isTargetPlayer == 0)
+		{
+			Aimsharp.Cast("Curse of Recklessness");
+			return true;
+		}
+		 if (Aimsharp.CanCast("Curse of the Elements", "target") && (targetHealth > 15 || isTargetElite) && CoEOn && !CoROn && !Aimsharp.HasDebuff("Curse of the Elements", "target") && !Wand && playerMana > 7 && Aimsharp.LastCast() != "Curse of the Elements" && isTargetPlayer == 0)
+		{
+			Aimsharp.Cast("Curse of the Elements");
+			return true;
+		}
+		if (Aimsharp.CanCast("Siphon Life") && (targetHealth > 15 || isTargetElite) && !Aimsharp.HasDebuff("Siphon Life", "target") && Aimsharp.LastCast() != "Siphon Life" && !Wand && playerMana > 7)
+		{
+			Aimsharp.Cast("Siphon Life");
+			return true;
+		}
+		if (Aimsharp.CanCast("Immolate", "target") && !PvP && !Wand && Aimsharp.LastCast() != "Immolate" && !Aimsharp.HasDebuff("Immolate", "target") && Aimsharp.HasBuff("Incinerate", "player") && playerMana > 15 && !isMoving && (targetHealth > 25 || isTargetElite) && Aimsharp.CastingID("player") != 11665)
+		{
+			Aimsharp.Cast("Immolate");
+			return true;
+		}
+
+		
+	return false;
+}
+
+private bool ApplyDoTsTest(int targetHealth, bool isTargetElite)
+{
+    int petToTargetRange = GetPetToTargetRange();
+    int playerLevel = Aimsharp.GetPlayerLevel();
+    bool Wand = Aimsharp.IsCustomCodeOn("WandingOn");
+    int playerHealth = Aimsharp.Health("player");
+    int playerMana = Aimsharp.Mana("player");
+    bool PvP = Aimsharp.IsCustomCodeOn("PvPOn");
+    bool isMoving = Aimsharp.PlayerIsMoving();
+    bool NotFacing = Aimsharp.NotFacing();
+    bool CoEOn = Aimsharp.IsCustomCodeOn("CoE");
+    bool CoROn = Aimsharp.IsCustomCodeOn("CoR");
+    int isTargetPlayer = Aimsharp.CustomFunction("IsTargetPlayer");
+    bool InvocationToggle = Aimsharp.IsCustomCodeOn("InvocationToggle");
+    int refreshThreshold = InvocationToggle ? 5800 : 0; // Refresh DoTs at 5.5 seconds if Invocation is toggled on
+	int isMelee = Aimsharp.CustomFunction("IsTargetMelee");
+	int isTargetTargetingMe = Aimsharp.CustomFunction("IsTargetTargetingMe");
+
+    ControlPet();
+	if (WardShadowDamage()) return true;
+	
+    // Drain Life
+    if (Aimsharp.CanCast("Drain Life", "target") && playerHealth < 80 && !Wand && (playerMana > 5 || targetHealth < 20) && Aimsharp.Range("target") <= 24)
+    {
+        Aimsharp.Cast("Draino");
+        return true;
+    }
+	
+	if (Aimsharp.CanCast("Curse of Exhaustion") && !Aimsharp.HasDebuff("Curse of Exhaustion", "target") && !Wand && isMelee == 1 && isTargetPlayer == 1 && isTargetTargetingMe == 1 && isMoving)
+    {
+        Aimsharp.Cast("ExhaustionMacro");
+        return true;
+    }
+	
+    // Haunt
+    if (Aimsharp.CanCast("Haunt") && !Aimsharp.HasDebuff("Haunt", "target") && !Wand && (playerMana > 15 || targetHealth < 20))
+    {
+        Aimsharp.Cast("Haunt");
+        return true;
+    }
+	
+	if (Aimsharp.CanCast("Drain Life", "target") && !Wand && (playerMana > 5 || targetHealth < 20) && Aimsharp.Range("target") <= 24)
+		{
+			Aimsharp.Cast("Draino");
+			return true;
+		}
+
+    // Corruption
+    int corruptionRemaining = Aimsharp.DebuffRemaining("Corruption", "target");
+    if (Aimsharp.CanCast("Corruption") && (targetHealth > 15 || isTargetElite) && (!Aimsharp.HasDebuff("Corruption", "target") || (InvocationToggle && corruptionRemaining <= refreshThreshold)) && !Wand && playerMana > 15 && (!CoEOn || !CoROn))
+    {
+        Aimsharp.Cast("Corruption");
+        return true;
+    }
+
+    // Curse Selection
+    int curseOfAgonyRemaining = Aimsharp.DebuffRemaining("Curse of Agony", "target");
+    if (Aimsharp.CanCast("Curse of Agony") && (targetHealth > 15 || isTargetElite) && (!Aimsharp.HasDebuff("Curse of Agony", "target") || (InvocationToggle && curseOfAgonyRemaining <= refreshThreshold)) && Aimsharp.LastCast() != "Curse of Agony" && !Wand && playerMana > 7 && !Aimsharp.HasDebuff("Curse of Exhaustion", "target"))
+    {
+        Aimsharp.Cast("Curse of Agony");
+        return true;
+    }
+	
+	if (Aimsharp.CanCast("Curse of Recklessness", "target") && (targetHealth > 15 || isTargetElite) && CoROn && !CoEOn && !Aimsharp.HasDebuff("Curse of Recklessness", "target") && !Wand && playerMana > 7 && Aimsharp.LastCast() != "Curse of Recklessness" && isTargetPlayer == 0)
+		{
+			Aimsharp.Cast("Curse of Recklessness");
+			return true;
+		}
+		 if (Aimsharp.CanCast("Curse of the Elements", "target") && (targetHealth > 15 || isTargetElite) && CoEOn && !CoROn && !Aimsharp.HasDebuff("Curse of the Elements", "target") && !Wand && playerMana > 7 && Aimsharp.LastCast() != "Curse of the Elements" && isTargetPlayer == 0)
+		{
+			Aimsharp.Cast("Curse of the Elements");
+			return true;
+		}
+
+    // Siphon Life
+    int siphonLifeRemaining = Aimsharp.DebuffRemaining("Siphon Life", "target");
+    if (Aimsharp.CanCast("Siphon Life") && (targetHealth > 15 || isTargetElite) && (!Aimsharp.HasDebuff("Siphon Life", "target") || (InvocationToggle && siphonLifeRemaining <= refreshThreshold)) && Aimsharp.LastCast() != "Siphon Life" && !Wand && playerMana > 7)
+    {
+        Aimsharp.Cast("Siphon Life");
+        return true;
+    }
+
+    // Immolate
+    int immolateRemaining = Aimsharp.DebuffRemaining("Immolate", "target");
+    if (Aimsharp.CanCast("Immolate", "target") && !PvP && !Wand && Aimsharp.LastCast() != "Immolate" && (!Aimsharp.HasDebuff("Immolate", "target") || (InvocationToggle && immolateRemaining <= refreshThreshold)) && Aimsharp.HasBuff("Incinerate", "player") && playerMana > 15 && !isMoving && (targetHealth > 25 || isTargetElite) && Aimsharp.CastingID("player") != 11665)
+    {
+        Aimsharp.Cast("Immolate");
+        return true;
+    }
+
+    return false;
+}
+
+
+private bool HandleWanding(int isWanding, bool isMoving, int WorldPingAverage)
+{
+	int targetHealth = Aimsharp.Health("target");
+    bool hasdots = (Aimsharp.HasDebuff("Corruption", "target") && Aimsharp.HasDebuff("Curse of Agony", "target") && Aimsharp.HasDebuff("Drain Life", "target") && Aimsharp.HasDebuff("Haunt", "target") && Aimsharp.HasDebuff("Siphon Life", "target") || Aimsharp.HasDebuff("Corruption", "target") && Aimsharp.HasDebuff("Curse of Agony", "target") && !Aimsharp.CanCast("Haunt", "target") && Aimsharp.HasDebuff("Siphon Life", "target")  && !Aimsharp.CanCast("Drain Life", "target"));
+	bool isPlayerChanneling = Aimsharp.IsChanneling("player");
+	int playerHealth = Aimsharp.Health("player");
+	int playerLevel = Aimsharp.GetPlayerLevel();
+	int isWandEquipped = Aimsharp.CustomFunction("IsWandEquipped");
+	int playerMana = Aimsharp.Mana("player");
+	bool Wand = Aimsharp.IsCustomCodeOn("WandingOn");
+	bool OnCD = Aimsharp.SpellCooldown("Haunt") == 0 && Aimsharp.SpellCooldown("Drain Life") == 0;
+    int soulShardCount = Aimsharp.CustomFunction("SoulShardCount");
+	bool PvP = Aimsharp.IsCustomCodeOn("PvPOn");
+	int playerCasting = Aimsharp.CastingID("player");
+	bool Drain = Aimsharp.IsCustomCodeOn("DrainOn");
+	bool isDraining = (playerCasting != 8288 || playerCasting != 1120);
+	
+	if (isWanding == 1 && (isMoving || ShouldStopWanding()) && isWandEquipped == 1)
+    {
+        Aimsharp.Cast("StopWanding");
+        return true;
+    }
+	
+	if (isDraining || Aimsharp.LastCast() == "Drain Soul") return false;
+	
+	if (isWanding == 0 && !isMoving && Aimsharp.Range("target") <= 30 && Aimsharp.CanCast("Shoot", "target") && !isPlayerChanneling && isWandEquipped == 1 && Wand)
+    {
+        Aimsharp.Cast("StartWanding");
+        return true;
+    }
+	 if (isWanding == 0 && !isMoving && Aimsharp.Range("target") <= 30 && hasdots && Aimsharp.CanCast("Shoot", "target") && isWandEquipped == 1 && !Wand && PvP && (playerCasting != 1120 || playerCasting != 5782))
+    {
+        Aimsharp.Cast("StartWanding");
+        return true;
+    }
+    // if (isWanding == 0 && !isMoving && Aimsharp.Range("target") <= 30 && hasdots && Aimsharp.CanCast("Shoot", "target") && !isPlayerChanneling && playerHealth > 80 && playerLevel < 30 && isWandEquipped == 1 && playerMana < 40 && !Wand)
+    // {
+        // Aimsharp.Cast("StartWanding");
+        // return true;
+    // }
+    return false;
+}
+
+private bool ShouldStopWanding()
+{
+    int targetHealth = Aimsharp.Health("target");
+    int soulShardCount = Aimsharp.CustomFunction("SoulShardCount");
+    int playerCasting = Aimsharp.CastingID("player");
+    bool isPlayerChanneling = Aimsharp.IsChanneling("player");
+    int curseOfAgonyRemaining = Aimsharp.DebuffRemaining("Curse of Agony");
+    int corruptionRemaining = Aimsharp.DebuffRemaining("Corruption");
+    int drainLifeCooldown = Aimsharp.SpellCooldown("Drain Life");
+    int hauntCooldown = Aimsharp.SpellCooldown("Haunt");
+    bool isDebuffSafe = (curseOfAgonyRemaining > 1200 || corruptionRemaining > 1200);
+    bool isCooldownSafe = (drainLifeCooldown < 1200 || hauntCooldown < 1200);
+	bool PvP = Aimsharp.IsCustomCodeOn("PvPOn");
+	bool isDrainNeeded = PvP && soulShardCount <= 16 && targetHealth <= 20;
+	bool Drain = Aimsharp.IsCustomCodeOn("DrainOn");
+
+    return ((!isDebuffSafe && isCooldownSafe) || (playerCasting != 0 || isPlayerChanneling) || (targetHealth <= 30 && Drain));
+}
+
+private bool ControlPet()
+{
+    bool isTargetEnemy = Aimsharp.TargetIsEnemy();
+    int targetHealth = Aimsharp.Health("target");
+    bool PetAttackOff = Aimsharp.IsCustomCodeOn("PetAttackOff");
+    bool petIsAttackingMyTarget = Aimsharp.CustomFunction("IsPetAttackingMyTarget") == 1;
+	bool isPetAlive = Aimsharp.CustomFunction("IsPetAlive") == 1;
+	bool isPetActive = Aimsharp.PlayerHasPet();
+
+    if (isPetActive && isTargetEnemy && targetHealth > 0 && !PetAttackOff && !petIsAttackingMyTarget && isPetAlive)
+    {
+        Aimsharp.Cast("PetAttack");
+        return true;
+    }
+    
+
+    return false;
+}
+
+private bool CastFearOnMouseover()
+{
+    int isShiftKeyDown = Aimsharp.CustomFunction("IsShiftKeyDown");
+    int mouseoverHasFear = Aimsharp.CustomFunction("MouseoverHasFear");
+    int isWanding = Aimsharp.CustomFunction("IsWanding");
+	bool PvP = Aimsharp.IsCustomCodeOn("PvPOn");
+
+    if (isWanding == 1 && isShiftKeyDown == 1 && Aimsharp.CanCast("Fear", "mouseover") && mouseoverHasFear == 0 && PvP)
+    {
+        Aimsharp.Cast("StopWanding");
+        return true;
+    }
+
+    if (isShiftKeyDown == 1 && Aimsharp.CanCast("Fear", "mouseover") && mouseoverHasFear == 0)
+    {
+        Aimsharp.Cast("FearMO");
+        return true;
+    }
+
+    return false;
+}
+
+private bool MouseoverDotting()
+{
+    int mouseoverCurseOfAgony = Aimsharp.CustomFunction("MouseoverHasCurseOfAgony");
+    int mouseoverCorruption = Aimsharp.CustomFunction("MouseoverHasCorruption");
+	int mouseoverImmolate = Aimsharp.CustomFunction("MouseoverHasImmolate");
+	int mouseoverSiphon = Aimsharp.CustomFunction("MouseoverHasSiphon");
+    int isWanding = Aimsharp.CustomFunction("IsWanding");
+    bool hasdots = Aimsharp.HasDebuff("Corruption", "target") && Aimsharp.HasDebuff("Curse of Agony", "target");
+    int averagePing = 222;
+    int wandingToggleDelay = 2000;
+	bool isMoving = Aimsharp.PlayerIsMoving();
+
+    if (isWanding == 1 && (Aimsharp.CanCast("Curse of Agony", "mouseover") && mouseoverCurseOfAgony == 0 || Aimsharp.CanCast("Corruption", "mouseover") && mouseoverCorruption == 0))
+    {
+        Aimsharp.Cast("StopWanding");
+        return true;
+    }
+
+    if (Aimsharp.CanCast("Curse of Agony", "mouseover") && mouseoverCurseOfAgony == 0 && hasdots && Aimsharp.Range("mouseover") <= 36)
+    {
+        Aimsharp.Cast("CoAMO");
+        return true;
+    }
+
+    if (Aimsharp.CanCast("Corruption", "mouseover") && mouseoverCorruption == 0 && hasdots && Aimsharp.Range("mouseover") <= 36)
+    {
+        Aimsharp.Cast("CorruptMO");
+        return true;
+    }
+	
+	// if (Aimsharp.CanCast("Siphon Life", "mouseover") && mouseoverSiphon == 0 && hasdots && Aimsharp.Range("mouseover") <= 36 && !isMoving)
+    // {
+        // Aimsharp.Cast("SiphonMMO");
+        // return true;
+    // }
+	
+	if (Aimsharp.CanCast("Immolate", "mouseover") && mouseoverImmolate == 0 && hasdots && Aimsharp.Range("mouseover") <= 36 && !isMoving)
+    {
+        Aimsharp.Cast("ImmolateMO");
+        return true;
+    }
+
+    return false;
+}
+
+private bool PvPRotation()
+{
+    int targetHealth = Aimsharp.Health("target");
+    bool isMoving = Aimsharp.PlayerIsMoving();
+    int playerCasting = Aimsharp.CastingID("player");
+    int playerHealth = Aimsharp.Health("player");
+    int playerMana = Aimsharp.Mana("player");
+	int isShiftKeyDown = Aimsharp.CustomFunction("IsShiftKeyDown");
+	bool hasdotspvp = Aimsharp.HasDebuff("Corruption", "target");
+	int soulShardCount = Aimsharp.CustomFunction("SoulShardCount");
+	int isWanding = Aimsharp.CustomFunction("IsWanding");
+    int WorldPingAverage = 222;
+	bool Wand = Aimsharp.IsCustomCodeOn("WandingOn");
+	int playerLevel = Aimsharp.GetPlayerLevel();
+	int drainSoulRemaining = Aimsharp.CastingRemaining("player");
+	bool Drain = Aimsharp.IsCustomCodeOn("DrainOn");
+
+	ControlImpFirebolt();
+	CastDrainOrShadowburn();
+	ControlPet();
+		
+	if (Drain && targetHealth < 20 && (playerCasting == 8288 || playerCasting == 1120))
+	{
+		return false;
+	}
+	
+    if (playerCasting != 0 || Wand)
+        return false;
+	
+	Buffing();
+    if (Aimsharp.CanCast("Drain Life", "target") && !Aimsharp.HasDebuff("Drain Life", "target"))
+    {
+        Aimsharp.Cast("Draino");
+        return true;
+    }
+	if (Aimsharp.CanCast("Corruption", "target") && !Aimsharp.HasDebuff("Corruption", "target"))
+    {
+        Aimsharp.Cast("Corruption");
+        return true;
+    }
+    // Maintain Immolate
+    if (Aimsharp.CanCast("Immolate", "target") && !Aimsharp.HasDebuff("Immolate", "target") && !isMoving)
+    {
+        Aimsharp.Cast("Immolate");
+        return true;
+    }
+	if (Aimsharp.CanCast("Shadow Cleave") && Aimsharp.Range("target") <= 5)
+    {
+        Aimsharp.Cast("Shadow Cleave");
+        return true;
+    }
+	if (Aimsharp.CanCast("Searing Pain", "target") && hasdotspvp)
+    {
+        Aimsharp.Cast("Searing Pain");
+        return true;
+    }
+	return HandleWanding(isWanding, isMoving, WorldPingAverage);
+   
+
+    // Incinerate as filler
+    if (Aimsharp.CanCast("Incinerate", "target"))
+    {
+        Aimsharp.Cast("Incinerate");
+        return true;
+    }
+
+    return false;
+}
+
+public override bool OutOfCombatTick()
+{
+    bool hasDemonSkin = Aimsharp.HasBuff("Demon Skin", "player");
+    bool hasDemonArmor = Aimsharp.HasBuff("Demon Armor", "player");
+    bool Drinking = (Aimsharp.HasBuff("Refreshment", "player") || Aimsharp.HasBuff("Drink", "player") || Aimsharp.HasBuff("Eat", "player") || Aimsharp.HasBuff("Food & Drink", "player"));
+    int playerCasting = Aimsharp.CastingID("player");
+    int gcdRemaining = Aimsharp.GCD();
+    int playerLevel = Aimsharp.GetPlayerLevel();
+	int playerMana = Aimsharp.Mana("player");
+	int playerHealth = Aimsharp.Health("player");
+	int petToTargetRange = GetPetToTargetRange();
+	int targetHealth = Aimsharp.Health("target");
+	bool isMoving = Aimsharp.PlayerIsMoving();
+	bool Wand = Aimsharp.IsCustomCodeOn("WandingOn");
+	int isWandEquipped = Aimsharp.CustomFunction("IsWandEquipped");
+	int isWanding = Aimsharp.CustomFunction("IsWanding");
+	int isShiftKeyDown = Aimsharp.CustomFunction("IsShiftKeyDown");
+	bool PvP = Aimsharp.IsCustomCodeOn("PvPOn");
+	bool Drain = Aimsharp.IsCustomCodeOn("DrainOn");
+	bool DestroRota = Aimsharp.IsCustomCodeOn("Destro");
+	bool shadowBoltVolleyIsKnown = Aimsharp.CustomFunction("IsShadowBoltVolleyKnown") == 1;
+	bool hasSoulSiphon = Aimsharp.HasBuff("Soul Siphon", "player");
+	bool isTankRota = Aimsharp.IsCustomCodeOn("TankRota");
+
+
+    if (Drinking || playerCasting != 0)
+        return false;
+
+	if (Buffing()) return true;
+	
+    wandingInitiated = false;
+	
+	if (WardShadowDamage()) return true;
+	CastShadowBoltVolley();
+	CastFearOnMouseover();
+	ControlPet();
+
+    CastDrainSoulIfAppropriate();
+	
+	if (Aimsharp.CanCast("Soul Link", "player") && !Aimsharp.HasBuff("Soul Link", "player") && Aimsharp.HasBuff("Master Demonologist", "player"))
+    {
+        Aimsharp.Cast("Soul Link");
+        return true;
+    }
+	
+	if (Aimsharp.CanCast("Life Tap", "player") && playerHealth > 65 && playerMana < 80 && Aimsharp.LastCast() != "Life Tap" && !hasSoulSiphon)
+	{
+		Aimsharp.Cast("Life Tap");
+        return true;
+    }
+	if (isWanding == 0 && !isMoving && Aimsharp.Range("target") <= 30 && Aimsharp.CanCast("Shoot", "target") && isWandEquipped == 1 && Wand && Aimsharp.Health("target") > 0 && Aimsharp.TargetIsEnemy())
+    {
+        Aimsharp.Cast("StartWanding");
+        return true;
+    }
+	//Execute ooc
+	if (Aimsharp.CanCast("Haunt") && !Aimsharp.HasDebuff("Haunt", "target") && Aimsharp.Range("target") <= 30 && Aimsharp.Health("target") > 0 && Aimsharp.TargetIsEnemy() && !Wand && PvP && !Drain && Aimsharp.Health("target") < 30)
+		{
+			Aimsharp.Cast("Haunt");
+			return true;
+		}
+		if (Aimsharp.CanCast("Corruption", "target") && !Aimsharp.HasDebuff("Corruption", "target") && Aimsharp.Range("target") <= 30 && Aimsharp.Health("target") > 0 && Aimsharp.TargetIsEnemy() && !Wand && !DestroRota && !isTankRota)
+		{
+			Aimsharp.Cast("Corruption");
+			return true;
+		}
+	if (Aimsharp.CanCast("Shadowburn", "target") && targetHealth <= 25 && DestroRota)
+		{
+			Aimsharp.Cast("Shadowburn");
+			return true;
+		}
+	if (Aimsharp.CanCast("Drain Life", "target") && playerMana >= 10 && Aimsharp.Range("target") <= 20 && Aimsharp.Health("target") > 0 && Aimsharp.TargetIsEnemy() && Aimsharp.Health("target") < 30)
+		{
+			Aimsharp.Cast("Draino");
+			return true;
+		}
+			if (Aimsharp.CanCast("Demon Charge") && isTankRota && Aimsharp.Health("target") > 0 && Aimsharp.TargetIsEnemy() && Aimsharp.Range("target") <= 25 && Aimsharp.Range("target") >= 8)
+    {
+        Aimsharp.Cast("Demon Charge");
+        return true;
+    }
+		if (Aimsharp.CanCast("Incinerate", "target") && !isMoving && playerMana >= 10 && playerCasting != 412758 && Aimsharp.LastCast() != "Incinerate" && (DestroRota || isTankRota) && Aimsharp.Health("target") > 0 && Aimsharp.TargetIsEnemy())
+		{
+			Aimsharp.Cast("Incinerate");
+			return true;
+		}
+	
+	
+		if (Aimsharp.CanCast("Searing Pain") && isTankRota && Aimsharp.Health("target") > 0 && Aimsharp.TargetIsEnemy() && isMoving)
+    {
+        Aimsharp.Cast("Searing Pain");
+        return true;
+    }
+	if (Aimsharp.CanCast("Haunt") && !Aimsharp.HasDebuff("Haunt", "target") && Aimsharp.Range("target") <= 30 && Aimsharp.Health("target") > 0 && Aimsharp.TargetIsEnemy() && !Wand && !PvP && !Drain)
+		{
+			Aimsharp.Cast("Haunt");
+			return true;
+		}
+	
+	if (Aimsharp.CanCast("Demon Skin") && !hasDemonSkin && playerLevel < 20)
+    {
+        Aimsharp.Cast("Demon Skin");
+        return true;
+    }
+
+    if (Aimsharp.CanCast("Demon Armor") && !hasDemonArmor && playerLevel >= 20)
+    {
+        Aimsharp.Cast("Demon Armor");
+        return true;
+    }
+	
+	
+
+    return false;
+}
+}
+}
+
+// possible pvp additions
+
+
+		// if (Aimsharp.CanCast("Drain Mana", "Target") && !isMoving && playerMana > 10 && PvP && !DestroRota && !Wand && hasdots && targetHealth > 15 && targetMana > 0 && burnPriest == 1 && isTargetPlayer == 1)
+		// {
+			// Aimsharp.Cast("Drain Mana");
+			// return true;
+		// }
+			// return true;
+		// }
+		// if (Aimsharp.CanCast("Fear", "Target") && !isMoving && playerMana > 10 && PvP && !DestroRota && !Wand && hasdots && targetHealth > 65 && isTargetPlayer == 1 && !Aimsharp.HasDebuff("Fear", "target") && playerCasting != 5782)
+		// {
+			// Aimsharp.Cast("Fear");
+			// return true;
+		// }
+
+
+// random
+
+		// if (playerMana < 5 && isWanding == 0 && !isMoving && Aimsharp.Range("target") <= 30 && Aimsharp.CanCast("Shoot", "target") && !isPlayerChanneling && isWandEquipped == 1 && !Drain && (playerCasting != 8288 || playerCasting != 5782))
+	// {
+	 // Aimsharp.Cast("StartWanding");
+        // return true;
+	// }
+	
+	
+	
+	 // || (Drain && !Aimsharp.PlayerIsMoving())
+	
+	// if (playerCasting != 0 || isPlayerChanneling || Aimsharp.HasBuff("Metamorphosis", "player") || (Aimsharp.HasDebuff("Fear", "target") && playerHealth < 30)) return false;
+	
+	// Buffing();
+	
+	// if (Aimsharp.CanCast("Shadow Cleave") && Aimsharp.Range("target") <= 5 && Aimsharp.HasBuff("Metamorphosis", "player"))
+    // {
+        // Aimsharp.Cast("Shadow Cleave");
+        // return true;
+    // }
+	// if (ApplyDoTs(targetHealth, isTargetElite)) return true;
+	
+	// if (canCastIncinerate && isDebuffSafe && isCooldownSafe && !isMoving && playerMana > 15 && (targetHealth > 25 || isTargetElite) && !PvP && !DestroRota)
+    // {
+        // Aimsharp.Cast("Incinerate");
+        // return true;
+    // }
+	
+	// return HandleWanding(isWanding, isMoving, WorldPingAverage);
+
+
+// old combat tick block mess	
+/* 	public override bool CombatTick()
+{
+    int playerLevel = Aimsharp.GetPlayerLevel();
+    int targetHealth = Aimsharp.Health("target");
+    int soulShardCount = Aimsharp.CustomFunction("SoulShardCount");
+    bool isMoving = Aimsharp.PlayerIsMoving();
+    int playerCasting = Aimsharp.CastingID("player");
+    bool isPlayerChanneling = Aimsharp.IsChanneling("player");
+    bool isTargetElite = Aimsharp.CustomFunction("IsTargetElite") == 1;
+   
+    int playerHealth = Aimsharp.Health("player");
+    bool hasDemonArmor = Aimsharp.HasBuff("Demon Armor", "player");
+	bool HasShadowTrance = Aimsharp.HasBuff("Shadow Trance", "player");
+	int playerMana = Aimsharp.Mana("player");
+	bool hasdots = Aimsharp.HasDebuff("Corruption", "target") && Aimsharp.HasDebuff("Curse of Agony", "target");
+	bool hasAlldots = Aimsharp.HasDebuff("Corruption", "target") && Aimsharp.HasDebuff("Curse of Agony", "target") && Aimsharp.HasDebuff("Haunt", "target") && Aimsharp.HasDebuff("Drain Life", "target");
+	bool Wand = Aimsharp.IsCustomCodeOn("WandingOn");
+	bool isPetAlive = Aimsharp.PlayerHasPet();
+	int curseOfAgonyRemaining = Aimsharp.DebuffRemaining("Curse of Agony");
+    int corruptionRemaining = Aimsharp.DebuffRemaining("Corruption");
+	bool Drain = Aimsharp.IsCustomCodeOn("DrainOn");
+	int playerChannelingID = Aimsharp.CastingID("player");
+	int isWandEquipped = Aimsharp.CustomFunction("IsWandEquipped");
+	bool PvP = Aimsharp.IsCustomCodeOn("PvPOn");
+	bool DestroRota = Aimsharp.IsCustomCodeOn("Destro");
+	int targetMana = Aimsharp.Mana("target");
+	int isTargetPlayer = Aimsharp.CustomFunction("IsTargetPlayer");
+    // Check cooldowns of spells
+    int drainLifeCooldown = Aimsharp.SpellCooldown("Drain Life");
+    int hauntCooldown = Aimsharp.SpellCooldown("Haunt");
+	int isShiftKeyDown = Aimsharp.CustomFunction("IsShiftKeyDown");
+
+    // Determine whether to cast Incinerate
+    bool canCastIncinerate = Aimsharp.CanCast("Incinerate");
+    bool isDebuffSafe = (curseOfAgonyRemaining > 1000 || corruptionRemaining > 1000);
+    bool isCooldownSafe = (drainLifeCooldown > 1000 && hauntCooldown > 1000);
+	bool isCooldownSafeCB = drainLifeCooldown > 1000;
+	bool FearOn = Aimsharp.IsCustomCodeOn("FearOn");
+	int isWanding = Aimsharp.CustomFunction("IsWanding");
+    int WorldPingAverage = 222;
+	int burnPriest = Aimsharp.CustomFunction("IsPriest");
+    bool isWandActive = Aimsharp.CustomFunction("IsWanding") == 1;
+	int drainSoulRemaining = Aimsharp.CastingRemaining("player");
+	bool AfflicRota = Aimsharp.IsCustomCodeOn("AfflicOn");
+	
+	AttackTotemWithWand();
+	
+	if (FearOn)
+    {
+        return CastFearIfToggled();
+    }
+	
+	{
+    if (DestroRota)
+    return DestroRotation();
+	}
+	{
+	if (AfflicRota)
+    return AfflictionRotation();
+	}
+	{
+    if (Aimsharp.HasBuff("Metamorphosis", "player"))
+    return PvPRotation();
+	}
+	
+	
+			
+} */

@@ -1,0 +1,1049 @@
+using System.Linq;
+using System.Diagnostics;
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using AimsharpWow.API; //needed to access Aimsharp API
+
+namespace AimsharpWow.Modules
+{
+    public class ClassicHardcoreDruid: Rotation
+    {
+		//spellnames
+				// List of Druid spells
+		List<string> SpellsList = new List<string>
+		{
+			"Wrath", "Moonfire", "Starfire", "Rejuvenation", "Regrowth", 
+			"Healing Touch", "Entangling Roots", "Thorns", "Barkskin", "Tranquility",
+			"Innervate", "Swiftmend", "Nature's Grasp", "Starfall", "Wild Growth", "Faerie Fire",
+			"Cyclone", "Hibernate", "Soothe Animal", "Travel Form", "Bear Form", "Cat Form",
+			"Dire Bear Form", "Aquatic Form", "Flight Form", "Swift Flight Form", "Prowl", "Rip", "Ferocious Bite", "Mangle(Cat)", "Lacerate",
+			"Mark of the Wild", "Sunfire", "Starsurge", "Remove Curse", "Bash", "Claw", "Tiger's Fury", "Rake", "Shred", "Maul", "Demoralizing Roar",
+			"Enrage", "Healing Potion", "Savage Roar", "Mangle(Bear)", "Swipe", "Omen of Clarity", "Feral Charge"
+		};
+
+		// List of Druid buffs
+		List<string> BuffsList = new List<string>
+		{
+			"Mark of the Wild", "Thorns", "Omen of Clarity", "Barkskin", "Nature's Grasp", "Innervate", "Tranquility", "Rejuvenation", "Fury of Stormrage", "Regrowth",
+			"Bear Form", "Cat Form", "Tiger's Fury", "Blessing of Freedom", "Divine Protection", "Enrage", "Clearcasting", "Savage Roar", "Omen of Clarity", "Wild Growth",
+			"Retaliation"
+			
+		};
+		
+	 
+		// List of Druid debuffs
+		List<string> DebuffsList = new List<string>
+		{
+			"Moonfire", "Faerie Fire", "Entangling Roots", "Insect Swarm", "Rip", "Lacerate", "Mangle", "Hibernate", "Sunfire", "Rake", "Bash", "Demoralizing Roar", "Crippling Poison",
+			"Gouge", "Sap", "Freezing Trap"
+		};
+
+
+		// Custom commands specific to the Warlock rotation
+		List<string> CustomCommandsList = new List<string>
+		{
+			"DispelOff", "SunMoonOff", "PvPBoom", "HibernateOff", "RestoMode", "Kitty", "ShredStuff"
+		};
+
+		// General buffs like food and drink
+		List<string> GeneralBuffsList = new List<string>
+		{
+			"Refreshment", "Eat", "Drink", "Food & Drink"
+		};
+		
+
+
+
+
+private void InitializeCustomLUAFunctions()
+{
+    CustomFunctions.Add("IsWandEquipped", "return IsEquippedItemType('Wands') and 1 or 0");
+    CustomFunctions.Add("IsWanding", "return IsAutoRepeatSpell(GetSpellInfo(5019)) and 1 or 0");
+    CustomFunctions.Add("SoulShardCount", "return GetItemCount(6265) or 0");
+
+    AddSpellCheckFunction("IsTargetElite", "elite", "worldboss");
+    AddSpellCheckFunction("MouseoverHasMoonfire", "8926");
+    AddSpellCheckFunction("MouseoverHasSunfire", "414684");
+	AddSpellCheckFunction("MouseoverHasImmolate", "1094");
+	AddSpellCheckFunction("MouseoverHasSiphon", "18265");
+    AddSpellCheckFunction("MouseoverHasFear", "5782");
+
+    CustomFunctions.Add("IsShiftKeyDown", "return IsShiftKeyDown() and 1 or 0");
+    CustomFunctions.Add("IsControlKeyDown", "return IsControlKeyDown() and 1 or 0");
+
+    // Add the function to check if the target is a humanoid
+    CustomFunctions.Add("IsTargetHumanoid", @"
+        local creatureType = UnitCreatureType('target')
+        return creatureType == 'Humanoid' and 1 or 0
+    ");
+	CustomFunctions.Add("TimeToDie", @"
+        local unit = 'target'
+        if not UnitExists(unit) then return 999 end
+        local health = UnitHealth(unit)
+        if not _G['TTD_Health'] then _G['TTD_Health'] = health end
+        if not _G['TTD_Time'] then _G['TTD_Time'] = GetTime() end
+
+        if health ~= _G['TTD_Health'] then
+            _G['TTD_Health'] = health
+            _G['TTD_Time'] = GetTime()
+        end
+
+        local timeElapsed = GetTime() - _G['TTD_Time']
+        if timeElapsed > 0 then
+            local healthLost = _G['TTD_Health'] - health
+            if healthLost > 0 then
+                local healthPerSecond = healthLost / timeElapsed
+                local timeToDie = health / healthPerSecond
+                return timeToDie
+            end
+        end
+        return 999
+    ");
+	
+	CustomFunctions.Add("IsTargetBeastOrDragonkin", @"
+		local creatureType = UnitCreatureType('mouseover')
+		return (creatureType == 'Beast' or creatureType == 'Dragonkin') and 1 or 0
+	");
+	
+	CustomFunctions.Add("PlayerHasCurse", @"
+		for i = 1, 40 do
+			local name, _, _, type = UnitDebuff('player', i)
+			if type == 'Curse' then
+				return 1
+			end
+		end
+		return 0
+	");
+	
+	CustomFunctions.Add("GetCurrentEnergy", @"
+    function GetCurrentEnergy()
+        local currentEnergy = UnitPower('player', 3) -- 3 is the power type for energy
+        return currentEnergy
+    end
+    return GetCurrentEnergy()
+	");
+	
+	
+	
+	CustomFunctions.Add("IsMouseoverRogueOrDruid", @"
+    local _, classFilename = UnitClass('mouseover')
+    return (classFilename == 'ROGUE' or classFilename == 'DRUID') and 1 or 0
+");
+
+
+CustomFunctions.Add("IsTargetPlayer", @"
+    return UnitIsPlayer('target') and 1 or 0
+");
+
+CustomFunctions.Add("HasFuryOfStormrage", @"
+    local spellIdOfFuryOfStormrage = 414800 -- Replace with the actual spell ID
+    for i = 1, 40 do
+        local _, _, _, _, _, _, _, _, _, spellId = UnitBuff('player', i)
+        if spellId == spellIdOfFuryOfStormrage then
+            return 1
+        end
+    end
+    return 0
+");
+
+CustomFunctions.Add("IsMouseoverMeleeClass", @"
+    local _, classFilename = UnitClass('mouseover')
+    return (classFilename == 'ROGUE' or classFilename == 'PALADIN' or classFilename == 'WARRIOR') and 1 or 0
+");
+
+CustomFunctions.Add("IsTargetMeleeClass", @"
+    local _, classFilename = UnitClass('target')
+    return (classFilename == 'ROGUE' or classFilename == 'PALADIN' or classFilename == 'WARRIOR' or classFilename == 'DRUID' or classFilename == 'HUNTER') and 1 or 0
+");
+
+CustomFunctions.Add("IsTargetTargetingMe", @"
+    return UnitIsUnit('targettarget', 'player') and 1 or 0
+");
+
+
+
+// CustomFunctions.Add("IsPlayerBehindTarget", @"
+    // local frame = CreateFrame('Frame')
+    // local isBehindTarget = 1  -- Assume behind by default
+
+    // frame:RegisterEvent('UI_ERROR_MESSAGE')
+    // frame:SetScript('OnEvent', function(self, event, messageType, message)
+        // if message == 'You must be behind your target.' then
+            // isBehindTarget = 0  -- Not behind the target
+        // else
+            // isBehindTarget = 1  -- Behind the target or no relevant error message
+        // end
+    // end)
+
+    // return function()
+        // return isBehindTarget
+    // end
+// ");
+
+
+
+/* CustomFunctions.Add("CanShred", @"
+    if IsSpellInRange('Shred', 'target') == 1 then
+        local usable, nomana = IsUsableSpell('Shred')
+        if usable then
+            CastSpellByName('Shred')
+            if SpellIsTargeting() then
+                CameraOrSelectOrMoveStop()
+                CancelPendingSpell()
+                return 0 -- Not behind target
+            end
+            return 1 -- Behind target or can't determine
+        end
+    end
+    return 0 -- Not in range or not usable
+");
+ */
+
+
+
+}
+
+private void AddSpellCheckFunction(string functionName, params string[] args)
+{
+    string luaScript;
+    if (args.Length > 1)
+    {
+        luaScript = string.Format(@"
+            local classification = UnitClassification('target')
+            return (classification == '{0}' or classification == '{1}') and 1 or 0
+        ", args[0], args[1]);
+    }
+    else
+    {
+        luaScript = string.Format(@"
+            for i = 1, 40 do
+                if UnitDebuff('mouseover', i) == GetSpellInfo({0}) then return 1 end
+            end
+            return 0
+        ", args[0]);
+    }
+
+    CustomFunctions.Add(functionName, luaScript);
+}
+
+private static Stopwatch autoAttackTimer = new Stopwatch();
+private DateTime lastRejuvenationTime = DateTime.MinValue;
+private DateTime lastRegrowthTime = DateTime.MinValue;
+private DateTime lastDispelTime = DateTime.MinValue;
+private Stopwatch entanglingRootsTimer = new Stopwatch();
+
+public override void LoadSettings()
+{
+    Settings.Add(new Setting("Game Client Language", new List<string> { "English" }, "English"));
+}
+
+public override void Initialize()
+{
+    Aimsharp.PrintMessage("Hardcore Classic Druid", Color.Orange);
+    Aimsharp.PrintMessage("Version 1.0 (WoW HC Classic)", Color.Orange);
+
+    // Define Warlock-specific macros
+    var macros = new Dictionary<string, string>
+    {
+        {"Stopcast", "/stopcasting"},
+        {"AutoAttack", "/startattack"},
+		{"MotW", "/cast [@player] Mark of the Wild"},
+		{"OmenofClarity", "/cast [@player] Omen of Clarity"},
+		{"Thornz", "/cast [@player] Thorns"},
+		{"MoonMO", "/cast [@mouseover, harm, nodead] Moonfire"},
+        {"SunMO", "/cast [@mouseover, harm, nodead] Sunfire"},
+		{"HibernateMO", "/cast [@mouseover, harm, nodead] Hibernate"},
+		{"SootheMO", "/cast [@mouseover, harm, nodead] Soothe"},
+		{"RootMO", "/cast [@mouseover, harm, nodead] Entangling Roots"},
+		{"RemoveCurseMe", "/cast [@player] Remove Curse"},
+		{"ExeDam", "/use 10"},
+		{"FaerieMO", "/cast [@mouseover, harm, nodead] Faerie Fire"},
+		{"MangleMacro", "/cast Mangle(Cat)"},
+		{"Powershift", "/cast !Cat Form"},
+		{"HealingPotionMacro", "/use Healing Potion"},
+		{"WildGrowthMacro", "/cast [@player] Wild Growth"},
+		{"RejuvenationPlayer", "/cast [@player] Rejuvenation"},
+		{"RegrowthPlayer", "/cast [@player] Regrowth"},
+		{"HealingTouchPlayer", "/cast [@player] Healing Touch"}
+		
+
+
+		
+	};
+	
+	CustomCommands.Add("DispelOff");
+	CustomCommands.Add("SunMoonOff");
+	CustomCommands.Add("RootOff");
+	CustomCommands.Add("HibernateOff");
+	CustomCommands.Add("OnlyWrath");
+	CustomCommands.Add("Kitty");
+	
+
+    foreach (var macro in macros)
+    {
+        Macros.Add(macro.Key, macro.Value);
+    }
+
+    InitializeCustomLUAFunctions();
+
+
+    var items = new List<string> { "Healthstone", "Soul Shard", "Healing Potion" };
+    foreach (var item in items)
+    {
+        Items.Add(item);
+    }
+
+    AddToCollection(Spellbook, SpellsList);
+    AddToCollection(Buffs, BuffsList);
+    AddToCollection(Buffs, GeneralBuffsList);
+    AddToCollection(Debuffs, DebuffsList);
+    AddToCollection(CustomCommands, CustomCommandsList);
+}
+
+private void AddToCollection(ICollection<string> collection, IEnumerable<string> items)
+{
+    foreach (var item in items)
+    {
+        collection.Add(item);
+    }
+}
+
+public override bool CombatTick()
+{
+    bool CatMode = Aimsharp.IsCustomCodeOn("Kitty");
+    bool isInBearForm = Aimsharp.HasBuff("Bear Form", "player");
+	bool isInCatForm = Aimsharp.HasBuff("Cat Form", "player");
+    int targetRange = Aimsharp.Range("target");
+    bool isTargetRooted = Aimsharp.HasDebuff("Entangling Roots", "target");
+    bool hasDivineShield = Aimsharp.HasBuff("Divine Protection", "target");
+    const int SafeDistance = 16; // Define the safe distance
+	bool BoomkinPvP = Aimsharp.IsCustomCodeOn("PvPBoom");
+	bool Resto = Aimsharp.IsCustomCodeOn("RestoMode");
+	
+	if (Resto)
+	{
+		return RestoDruidHealingRotation();
+	}
+    if (BoomkinPvP)
+	{
+		return BoomkinPvPRotation();
+	}
+	if (CatMode && isInCatForm)
+    {
+        return FeralRotation();
+    }
+    if (isInBearForm)
+    {
+        return BearModeRotation();
+    }
+	if ((!CatMode && CastFaerieFireOnMouseover() || CastEntanglingRootsOnMouseover()))
+    {
+        return true;
+    }
+
+    // Execute and other rotations
+    if ((!CatMode && ExecuteRotation() || MouseoverDotting() || CastHibernateOnMouseover() || SelfDispel() || BalanceDruidRotation()))
+    {
+        return true;
+    }
+
+    return false;
+}
+
+private bool BoomkinPvPRotation()
+{
+    // Define necessary variables
+    int targetHealth = Aimsharp.Health("target");
+    int playerHealth = Aimsharp.Health("player");
+    int playerMana = Aimsharp.Mana("player");
+    int targetRange = Aimsharp.Range("target");
+    bool isMoving = Aimsharp.PlayerIsMoving();
+    int isMouseoverMeleeClass = Aimsharp.CustomFunction("IsMouseoverMeleeClass");
+    bool isTargetTargetingMe = Aimsharp.CustomFunction("IsTargetTargetingMe") == 1;
+    bool dontRoot = Aimsharp.HasBuff("Freedom", "target") || !Aimsharp.HasDebuff("Crippling Poison", "target") || Aimsharp.HasDebuff("Entangling Roots", "target") || Aimsharp.HasBuff("Divine Protection", "target");
+	int hasFuryOfStormrage = Aimsharp.CustomFunction("HasFuryOfStormrage");
+	bool isOutdoors = Aimsharp.PlayerIsOutdoors();
+	bool pauseRota = Aimsharp.HasDebuff("Gouge", "target") || Aimsharp.HasBuff("Divine Protection", "target")  || Aimsharp.HasBuff("Retaliation", "target") || Aimsharp.HasDebuff("Sap", "target") || Aimsharp.HasDebuff("Freezing Trap", "target");
+	bool isForm = Aimsharp.HasBuff("Bear Form", "player") || Aimsharp.HasBuff("Cat Form", "player");
+	int isMelee = Aimsharp.CustomFunction("IsTargetMeleeClass");
+	int wildgrowthCD = Aimsharp.SpellCooldown("Wild Growth");
+
+	CastHibernateOnMouseover();
+	CastFaerieFireOnMouseover();
+	SelfDispel();
+	
+	if (Aimsharp.HasBuff("Bear Form", "player"))
+	{
+		return BearModeRotation();
+	}
+	if (pauseRota || isForm)
+		return false;
+	
+    // Root melee targets if conditions are met
+    if (targetRange < 10 && isTargetTargetingMe && Aimsharp.CanCast("Entangling Roots", "target") && !dontRoot)
+    {
+       CastEntanglingRootsOnMouseover();
+    }
+	
+	if (playerHealth < 70 && (hasFuryOfStormrage == 1 || Aimsharp.HasBuff("Fury of Stormrage", "player")) && Aimsharp.CanCast("Healing Touch", "player"))
+    {
+        return true;
+    }
+	if (playerHealth < 75 && playerMana > 30 && Aimsharp.CanCast("Wild Growth", "player") && isMoving)
+    {
+        Aimsharp.Cast("WildGrowthMacro");
+        return true;
+    }
+	 // Healing and defensive abilities
+    if (playerHealth < 90 && playerMana > 25 && Aimsharp.CanCast("Rejuvenation", "player") && !Aimsharp.HasBuff("Rejuvenation", "player") && isMoving)
+    {
+        Aimsharp.Cast("Rejuvenation");
+        return true;
+    }
+    if (playerHealth < 50 && wildgrowthCD > 800 && playerMana > 25 && Aimsharp.CanCast("Regrowth", "player") && !Aimsharp.HasBuff("Regrowth", "player") &&  !isMoving)
+    {
+        Aimsharp.Cast("Regrowth");
+        return true;
+    }
+
+    // Nature's Grasp when targeted by specific classes
+    if (isOutdoors && Aimsharp.CanCast("Nature's Grasp", "player") && isMoving && isMelee == 1)
+    {
+        Aimsharp.Cast("Nature's Grasp");
+        return true;
+    }
+    // Starsurge on cooldown
+    if (Aimsharp.CanCast("Starsurge", "target"))
+    {
+        Aimsharp.Cast("Starsurge");
+        return true;
+    }
+	
+    // Spam Moonfire if moving
+    if (isMoving && Aimsharp.CanCast("Moonfire", "target") && targetHealth > 0)
+    {
+        Aimsharp.Cast("Moonfire");
+        return true;
+    }
+	
+	// maintain dot if standing
+	if (!isMoving && Aimsharp.CanCast("Moonfire", "target") && (!Aimsharp.HasDebuff("Moonfire", "target") || targetHealth < 15) && targetHealth > 0)
+    {
+        Aimsharp.Cast("Moonfire");
+        return true;
+    }
+
+    // Wrath if not moving and Starsurge on cooldown
+    if (!isMoving && Aimsharp.CanCast("Wrath", "target"))
+    {
+        Aimsharp.Cast("Wrath");
+        return true;
+    }
+
+    
+
+   
+
+    return false;
+}
+
+private bool RestoDruidHealingRotation()
+{
+    int targetHealth = Aimsharp.Health("target");
+    int playerHealth = Aimsharp.Health("player");
+    bool enemyTarget = Aimsharp.TargetIsEnemy();
+	bool isMoving = Aimsharp.PlayerIsMoving();
+	int hasFuryOfStormrage = Aimsharp.CustomFunction("HasFuryOfStormrage");
+	bool isOutdoors = Aimsharp.PlayerIsOutdoors();
+	bool pauseRota = Aimsharp.HasDebuff("Gouge", "target") || Aimsharp.HasBuff("Divine Protection", "target")  || Aimsharp.HasBuff("Retaliation", "target") || Aimsharp.HasDebuff("Sap", "target") || Aimsharp.HasDebuff("Freezing Trap", "target");
+	bool isForm = Aimsharp.HasBuff("Bear Form", "player") || Aimsharp.HasBuff("Cat Form", "player");
+
+    CastHibernateOnMouseover();
+    CastFaerieFireOnMouseover();
+    SelfDispel();
+
+    if (Aimsharp.HasBuff("Bear Form", "player"))
+    {
+        return BearModeRotation();
+    }
+    if (pauseRota || isForm)
+        return false;
+
+    // Player Healing
+    if (playerHealth < 80 && Aimsharp.CanCast("Rejuvenation", "player") && !Aimsharp.HasBuff("Rejuvenation", "player"))
+    {
+        Aimsharp.Cast("RejuvenationPlayer");
+        return true;
+    }
+
+    if (playerHealth < 60 && (hasFuryOfStormrage == 1 || Aimsharp.HasBuff("Fury of Stormrage", "player")) && Aimsharp.CanCast("Healing Touch", "player"))
+    {
+        Aimsharp.Cast("HealingTouchPlayer");
+        return true;
+    }
+
+    if (playerHealth < 40 && Aimsharp.CanCast("Regrowth", "player"))
+    {
+        Aimsharp.Cast("RegrowthPlayer");
+        return true;
+    }
+	
+	if (isOutdoors && Aimsharp.CanCast("Nature's Grasp", "player") && isMoving)
+    {
+        Aimsharp.Cast("Nature's Grasp");
+        return true;
+    }
+
+    // Target Healing
+    if (targetHealth < 80 && Aimsharp.CanCast("Rejuvenation", "target") && !Aimsharp.HasBuff("Rejuvenation", "target") && !enemyTarget)
+    {
+        Aimsharp.Cast("Rejuvenation");
+        return true;
+    }
+
+    if (targetHealth < 60 && (hasFuryOfStormrage == 1 || Aimsharp.HasBuff("Fury of Stormrage", "target")) && Aimsharp.CanCast("Healing Touch", "target") && !enemyTarget)
+    {
+        Aimsharp.Cast("Healing Touch");
+        return true;
+    }
+
+    if (targetHealth < 40 && Aimsharp.CanCast("Regrowth", "target") && !enemyTarget)
+    {
+        Aimsharp.Cast("Regrowth");
+        return true;
+    }
+
+    // Offensive spells remain unchanged
+    if (Aimsharp.CanCast("Starsurge", "target") && enemyTarget)
+    {
+        Aimsharp.Cast("Starsurge");
+        return true;
+    }
+
+    if (Aimsharp.CanCast("Wrath", "target") && enemyTarget && !isMoving)
+    {
+        Aimsharp.Cast("Wrath");
+        return true;
+    }
+
+    return false;
+}
+
+private bool FeralRotation()
+{
+    bool isInCatForm = Aimsharp.HasBuff("Cat Form", "player");
+    int playerEnergy = Aimsharp.Power("player");
+    int playerComboPoints = Aimsharp.PlayerSecondaryPower(); 
+    bool CatMode = Aimsharp.IsCustomCodeOn("Kitty");
+    int targetRange = Aimsharp.Range("target");
+	int savageRoarRemaining = Aimsharp.BuffRemaining("Savage Roar"); 
+    bool hasSavageRoar = Aimsharp.HasBuff("Savage Roar", "player");
+	int targetHealth = Aimsharp.Health("target");
+	int playerMana = Aimsharp.Mana("player");
+	int playerCasting = Aimsharp.CastingID("player");
+	bool hasClearcasting = Aimsharp.HasBuff("Clearcasting", "player");
+	bool doShred = Aimsharp.IsCustomCodeOn("ShredStuff");
+	int currentEnergy = Aimsharp.CustomFunction("GetCurrentEnergy");
+	int isTargetPlayer = Aimsharp.CustomFunction("IsTargetPlayer");
+
+		FeralExecuteRotation();
+		
+	if (CatMode && targetRange <= 5)
+	{
+		if (playerCasting != 0)
+        return false;
+		
+        if (!Aimsharp.HasBuff("Cat Form", "player") && CatMode && playerMana > 30)
+		{
+			Aimsharp.Cast("Cat Form");
+			return true;
+		}
+		if (Aimsharp.HasBuff("Clearcasting", "player") && Aimsharp.CanCast("Shred", "target") && doShred)
+        {
+            Aimsharp.Cast("Shred");
+            return true;
+        }
+		if (playerComboPoints >= 5 && Aimsharp.CanCast("Rip", "target") && targetHealth >= 10 && hasSavageRoar && savageRoarRemaining > 9000 && isTargetPlayer == 0)
+        {
+            Aimsharp.Cast("Rip");
+            return true;
+        }
+		if (Aimsharp.CanCast("Cat Form", "player") && currentEnergy < 35 && playerMana > 28)
+		{
+			if (Aimsharp.HasBuff("Cat Form", "player"))
+			{
+				Aimsharp.Cast("Powershift");
+				return true;
+			}
+		}
+		if (playerComboPoints > 0 && (!hasSavageRoar || hasSavageRoar && savageRoarRemaining <= 1000) && Aimsharp.CanCast("Savage Roar", "player") && targetHealth >= 10)
+        {
+            Aimsharp.Cast("Savage Roar");
+            return true;
+        }
+		if (currentEnergy >= 40 && Aimsharp.CanCast("Mangle(Cat)", "target") && (!Aimsharp.HasBuff("Clearcasting", "player") || !doShred))
+        {
+            Aimsharp.Cast("Mangle(Cat)");
+            return true;
+        }
+		
+	}
+    
+	return false;
+}
+
+private bool UseHealingPotionIfNecessary()
+{
+    int playerHealth = Aimsharp.Health("player");
+    int targetHealth = Aimsharp.Health("target");
+
+    if (playerHealth < 30 && targetHealth < 40 && Aimsharp.CanUseItem("Healing Potion"))
+    {
+        Aimsharp.Cast("HealingPotion", true); // The second parameter 'true' is for quick delay
+        return true;
+    }
+
+    return false;
+}
+
+private bool UseShredIfBehindTarget()
+{
+    int canShred = Aimsharp.CustomFunction("CanShred");
+    if (canShred == 1)
+    {
+        Aimsharp.Cast("Shred");
+        return true;
+    }
+    return false;
+}
+
+private bool BalanceDruidRotation()
+{
+    int ttdThreshold = 3; // Time to die threshold in seconds
+    int timeToDie = Aimsharp.CustomFunction("TimeToDie");
+    bool isMoving = Aimsharp.PlayerIsMoving();
+    int playerMana = Aimsharp.Mana("player");
+    int playerHealth = Aimsharp.Health("player");
+    bool isOutdoors = Aimsharp.PlayerIsOutdoors();
+    int targetHealth = Aimsharp.Health("target");
+    bool OnlyWrath = Aimsharp.IsCustomCodeOn("OnlyWrath");
+    bool isForm = (Aimsharp.HasBuff("Bear Form", "player") || Aimsharp.HasBuff("Cat Form", "player"));
+	int hasFuryOfStormrage = Aimsharp.CustomFunction("HasFuryOfStormrage");
+	bool CatMode = Aimsharp.IsCustomCodeOn("Kitty");
+	bool hasFaerieFire = Aimsharp.HasDebuff("Faerie Fire", "target");
+	bool isInBearForm = Aimsharp.HasBuff("Bear Form", "player");
+	int playerCasting = Aimsharp.CastingID("player");
+	int starsurgeCooldown = Aimsharp.SpellCooldown("Starsurge");
+    
+    TimeSpan rejuvenationCooldown = TimeSpan.FromSeconds(12);
+    TimeSpan regrowthCooldown = TimeSpan.FromSeconds(12);
+    DateTime currentTime = DateTime.Now;
+
+    // Prioritize Healing Touch with Fury of Stormrage proc
+    if (isInBearForm || playerCasting != 0 || CatMode)
+        return false;
+	
+    if (playerHealth < 70 && (hasFuryOfStormrage == 1 || Aimsharp.HasBuff("Fury of Stormrage", "player")) && CastIfPossible("Healing Touch", "player"))
+    {
+        return true;
+    }
+	
+	
+    // Prioritize Regrowth if health is low
+    if (!isMoving && playerHealth < 40 && currentTime - lastRegrowthTime > regrowthCooldown && CastIfPossible("Regrowth", "player"))
+    {
+        lastRegrowthTime = currentTime;
+        return true;
+    }
+
+    // Check for OnlyWrath condition
+    if (OnlyWrath)
+    {
+        return !isMoving && CastIfPossible("Wrath", "target");
+    }
+
+   
+        
+
+    // Cast damage and utility spells
+    if (playerMana < 25)
+    {
+        if (CastIfPossible("Starsurge", "target")) return true;
+        if (!isMoving && CastIfPossible("Wrath", "target") && starsurgeCooldown > 1600) return true;
+    }
+    else
+    {
+        if (timeToDie > ttdThreshold)
+        {
+            if (CastIfNotActive("Sunfire", "target")) return true;
+            if (CastIfNotActive("Moonfire", "target")) return true;
+        }
+
+        if (CastIfPossible("Starsurge", "target")) return true;
+        if (!isMoving && CastIfPossible("Wrath", "target") && starsurgeCooldown > 1600) return true;
+    }
+
+    // Cast Rejuvenation if moving and health is below threshold
+    if (isMoving && playerHealth < 95 && currentTime - lastRejuvenationTime > rejuvenationCooldown && CastIfPossible("Rejuvenation", "player"))
+    {
+        lastRejuvenationTime = currentTime;
+        return true;
+    }
+
+    // Cast Nature's Grasp if moving and outdoors
+    if (isMoving && isOutdoors && CastIfPossible("Nature's Grasp", "target")) return true;
+	if (!hasFaerieFire && Aimsharp.CanCast("Faerie Fire", "target") && isMoving)
+    {
+        Aimsharp.Cast("Faerie Fire");
+        return true;
+    }
+	
+
+    return false;
+}
+
+private bool CastIfPossible(string spell, string target)
+{
+    if (Aimsharp.CanCast(spell, target))
+    {
+        Aimsharp.Cast(spell);
+        return true;
+    }
+    return false;
+}
+
+private bool CastIfNotActive(string spell, string target)
+{
+    if (!Aimsharp.HasDebuff(spell, target) && Aimsharp.CanCast(spell, target) && Aimsharp.LastCast() != spell)
+    {
+        Aimsharp.Cast(spell);
+        return true;
+    }
+    return false;
+}
+
+private bool CastHibernateOnMouseover()
+{
+    int mouseoverIsBeastOrDragonkin = Aimsharp.CustomFunction("IsTargetBeastOrDragonkin");
+	bool HibernateOff = Aimsharp.IsCustomCodeOn("HibernateOff");
+	bool isBearForm = Aimsharp.HasBuff("Bear Form", "player");
+
+    if (Aimsharp.CanCast("Hibernate", "mouseover") && mouseoverIsBeastOrDragonkin == 1 && !HibernateOff && !isBearForm)
+    {
+        Aimsharp.Cast("HibernateMO");
+        return true;
+    }
+
+    return false;
+}
+
+private bool ExecuteRotation()
+{
+    int targetHealthPercent = Aimsharp.Health("target");
+    int playerManaPercent = Aimsharp.Mana("player");
+    bool isMoving = Aimsharp.PlayerIsMoving();
+    int starsurgeCooldown = Aimsharp.SpellCooldown("Starsurge");
+    int isTargetPlayer = Aimsharp.CustomFunction("IsTargetPlayer");
+
+    const int HealthThreshold = 25; // Target health threshold for execute
+    const int ManaThreshold = 20; // Player mana threshold
+
+    if (targetHealthPercent < HealthThreshold && playerManaPercent > ManaThreshold && isMoving && starsurgeCooldown > 0 && isTargetPlayer == 1)
+    {
+        Aimsharp.Cast("Sunfire");
+		Aimsharp.Cast("ExeDam");
+        return true;
+    }
+
+    return false;
+}
+
+private bool FeralExecuteRotation()
+{
+    int targetHealthPercent = Aimsharp.Health("target");
+    int playerManaPercent = Aimsharp.Mana("player");
+    bool isMoving = Aimsharp.PlayerIsMoving();
+    int starsurgeCooldown = Aimsharp.SpellCooldown("Starsurge");
+    int isTargetPlayer = Aimsharp.CustomFunction("IsTargetPlayer");
+	int targetRange = Aimsharp.Range("target");
+
+    const int HealthThreshold = 25; // Target health threshold for execute
+    const int ManaThreshold = 20; // Player mana threshold
+
+    if (targetRange > 6 && targetHealthPercent < HealthThreshold && playerManaPercent > ManaThreshold && isMoving && isTargetPlayer == 1)
+    {
+        Aimsharp.Cast("Moonfire");
+        return true;
+    }
+
+    return false;
+}
+
+private bool BearModeRotation()
+{
+    bool isInBearForm = Aimsharp.HasBuff("Bear Form", "player");
+    int targetRange = Aimsharp.Range("target");
+    int playerRage = Aimsharp.Power("player");
+    int bashCooldown = Aimsharp.SpellCooldown("Bash");
+    int MangleCooldown = Aimsharp.SpellCooldown("Mangle(Bear)");
+    int enemiesInMelee = Aimsharp.EnemiesInMelee();
+
+    const int MeleeRange = 5;
+    const int BashRageCost = 10;
+    const int MaulRageCost = 15;
+    const int DemoralizingRoarRageCost = 10;
+
+    // Cast Enrage if available
+    if (Aimsharp.CanCast("Enrage", "player"))
+    {
+        Aimsharp.Cast("Enrage");
+        return true;
+    }
+	if (Aimsharp.CanCast("Swipe", "target") && playerRage >= 20 && enemiesInMelee > 2)
+    {
+        Aimsharp.Cast("Swipe");
+        return true;
+    }
+	if (playerRage >= 15 && Aimsharp.CanCast("Mangle(Bear)", "target"))
+    {
+        Aimsharp.Cast("Mangle(Bear)");
+        return true;
+    }
+
+    // Cast Bash if available, in melee range, and have enough rage
+    if (playerRage >= BashRageCost && Aimsharp.CanCast("Bash", "target") && targetRange <= MeleeRange)
+    {
+        Aimsharp.Cast("Bash");
+        return true;
+    }
+	if (playerRage >= 5 && Aimsharp.CanCast("Feral Charge", "target") && targetRange >= 8 && targetRange <= 25)
+    {
+        Aimsharp.Cast("Feral Charge");
+        return true;
+    }
+
+    // Cast Maul if Bash is on cooldown, in melee range, and have enough rage
+    if (bashCooldown > 0 && playerRage >= MaulRageCost && targetRange <= MeleeRange && Aimsharp.CanCast("Maul", "target") && MangleCooldown > 800)
+    {
+        Aimsharp.Cast("Maul");
+        return true;
+    }
+	
+
+    // Cast Demoralizing Roar if Bash is on cooldown and have enough rage
+    // if (bashCooldown > 0 && playerRage >= DemoralizingRoarRageCost && Aimsharp.CanCast("Demoralizing Roar", "player") && !Aimsharp.HasBuff("Demoralizing Roar", "target"))
+    // {
+        // Aimsharp.Cast("Demoralizing Roar");
+        // return true;
+    // }
+
+    return false;
+}
+
+private bool CastEntanglingRoots()
+{
+    int mouseoverRange = Aimsharp.Range("mouseover");
+    int isMouseoverMeleeClass = Aimsharp.CustomFunction("IsMouseoverMeleeClass");
+    bool hasFreedomBuff = Aimsharp.HasBuff("Blessing of Freedom", "mouseover");
+    bool hasDivineShield = Aimsharp.HasBuff("Divine Protection", "mouseover");
+    bool isRooted = Aimsharp.HasDebuff("Entangling Roots", "mouseover");
+    bool isMoving = Aimsharp.PlayerIsMoving();
+
+    const int SafeDistance = 20;
+    const int RootRange = 10;
+    const int RootCooldown = 10000; // 10 seconds cooldown for reapplying roots
+
+    if (isMouseoverMeleeClass == 1 && mouseoverRange <= RootRange && !hasFreedomBuff && !hasDivineShield && !isRooted && !isMoving)
+    {
+        if (!entanglingRootsTimer.IsRunning || entanglingRootsTimer.ElapsedMilliseconds > RootCooldown)
+        {
+            if (Aimsharp.CanCast("Entangling Roots", "mouseover"))
+            {
+                Aimsharp.Cast("RootMO");
+                entanglingRootsTimer.Restart();
+                return true;
+            }
+        }
+    }
+
+    // Resume doing damage if at a safe distance and target is rooted
+    if (mouseoverRange >= SafeDistance && isRooted)
+    {
+        entanglingRootsTimer.Reset();
+        return false; // Return false to continue with other rotation abilities
+    }
+
+    return false;
+}
+
+private bool CastFaerieFireOnMouseover()
+{
+    int mouseoverIsRogueOrDruid = Aimsharp.CustomFunction("IsMouseoverRogueOrDruid");
+	int moRange = Aimsharp.Range("mouseover");
+
+    if (mouseoverIsRogueOrDruid == 1 && Aimsharp.CanCast("Faerie Fire", "mouseover") && moRange < 31)
+    {
+        Aimsharp.Cast("FaerieMO");
+        return true;
+    }
+
+    return false;
+}
+
+private bool MouseoverDotting()
+{
+    int mouseoverMoonfire = Aimsharp.CustomFunction("MouseoverHasMoonfire");
+    int mouseoverSunfire = Aimsharp.CustomFunction("MouseoverHasSunfire");
+    int mouseoverIsBeastOrDragonkin = Aimsharp.CustomFunction("IsTargetBeastOrDragonkin");
+    bool hasdots = Aimsharp.HasDebuff("Sunfire", "target") && Aimsharp.HasDebuff("Moonfire", "target");
+    bool isMoving = Aimsharp.PlayerIsMoving();
+	bool DotsOffington = Aimsharp.IsCustomCodeOn("SunMoonOff");
+
+    // Check if the mouseover target is not a Beast or Dragonkin
+    if (mouseoverIsBeastOrDragonkin == 0)
+    {
+        if (Aimsharp.CanCast("Sunfire", "mouseover") && mouseoverSunfire == 0 && hasdots && Aimsharp.Range("mouseover") <= 36 && !DotsOffington)
+        {
+            Aimsharp.Cast("SunMO");
+            return true;
+        }
+
+        if (Aimsharp.CanCast("Moonfire", "mouseover") && mouseoverMoonfire == 0 && hasdots && Aimsharp.Range("mouseover") <= 36 && !DotsOffington)
+        {
+            Aimsharp.Cast("MoonMO");
+            return true;
+        }
+    }
+
+    return false;
+}
+
+private bool CastEntanglingRootsOnMouseover()
+{
+    int isShiftKeyDown = Aimsharp.CustomFunction("IsShiftKeyDown");
+	bool isForm = Aimsharp.HasBuff("Bear Form", "player") || Aimsharp.HasBuff("Cat Form", "player");
+
+    if (isShiftKeyDown == 1 && Aimsharp.CanCast("Entangling Roots", "target") && !isForm)
+    {
+        Aimsharp.Cast("Entangling Roots");
+        return true;
+    }
+
+    return false;
+}
+
+private bool SelfDispel()
+{
+    TimeSpan dispelCooldown = TimeSpan.FromSeconds(5);
+    DateTime currentTime = DateTime.Now;
+    int playerHasCurse = Aimsharp.CustomFunction("PlayerHasCurse");
+	bool DispelOff = Aimsharp.IsCustomCodeOn("Dispel");
+	bool isBearForm = Aimsharp.HasBuff("Bear Form", "player");
+
+    if (currentTime - lastDispelTime > dispelCooldown && playerHasCurse == 1 && Aimsharp.CanCast("Remove Curse", "player") && !DispelOff && !isBearForm)
+    {
+        Aimsharp.Cast("RemoveCurseMe");
+        lastDispelTime = currentTime;
+        return true;
+    }
+
+    return false;
+}
+
+public override bool OutOfCombatTick()
+{
+    bool hasMarkOfTheWild = Aimsharp.HasBuff("Mark of the Wild", "player");
+    bool hasThorns = Aimsharp.HasBuff("Thorns", "player");
+	bool hasOmen = Aimsharp.HasBuff("Omen of Clarity", "player");
+    bool Drinking = (Aimsharp.HasBuff("Refreshment", "player") || Aimsharp.HasBuff("Drink", "player") || Aimsharp.HasBuff("Eat", "player") || Aimsharp.HasBuff("Food & Drink", "player"));
+    int playerCasting = Aimsharp.CastingID("player");
+    int gcdRemaining = Aimsharp.GCD();
+    int playerMana = Aimsharp.Mana("player");
+    int playerHealth = Aimsharp.Health("player");
+    bool isMoving = Aimsharp.PlayerIsMoving();
+	bool isForm = (Aimsharp.HasBuff("Bear Form", "player") || Aimsharp.HasBuff("Cat Form", "player"));
+	bool CatMode = Aimsharp.IsCustomCodeOn("Kitty");
+	int playerEnergy = Aimsharp.Power("player");
+	int Range = Aimsharp.Range("target");
+	int playerRage = Aimsharp.Power("player");
+	bool Buffed = (Aimsharp.HasBuff("Omen of Clarity", "player") && Aimsharp.HasBuff("Thorns", "player"));
+
+    // Reset Regrowth timer if out of combat
+	
+	
+    if (!Aimsharp.InCombat())
+    {
+        lastRegrowthTime = DateTime.MinValue;
+    }
+	// if (!Aimsharp.HasBuff("Cat Form", "player") && CatMode && playerMana > 30 && !Drinking)
+		// {
+			// Aimsharp.Cast("Cat Form");
+			// return true;
+		// }
+	
+	if (playerRage >= 5 && Aimsharp.CanCast("Feral Charge", "target") && Range >= 8 && Range <= 25 && Aimsharp.HasBuff("Bear Form", "player"))
+    {
+        Aimsharp.Cast("Feral Charge");
+        return true;
+    }
+	if (playerEnergy >= 40 && Aimsharp.CanCast("Mangle(Cat)", "target") && Aimsharp.Health("target") > 0 && Aimsharp.TargetIsEnemy() && CatMode && Range < 6 && Aimsharp.HasBuff("Cat Form", "player"))
+    {
+        Aimsharp.Cast("Mangle(Cat)");
+        return true;
+    } 
+/* 	if (playerEnergy >= 30 && Aimsharp.CanCast("Tiger's Fury", "target") && Aimsharp.Health("target") > 0 && Aimsharp.TargetIsEnemy() && !Aimsharp.HasDebuff("Tiger's Fury", "target") && CatMode && Range < 16 && Aimsharp.LastCast() != "Tiger's Fury")
+    {
+        Aimsharp.Cast("Tiger's Fury");
+        return true;
+    } */
+	// Check if the player is currently drinking, casting, or on global cooldown
+	 // if (!hasMarkOfTheWild && Aimsharp.CanCast("Mark of the Wild", "player"))
+    // {
+        // Aimsharp.Cast("MotW");
+        // return true;
+    // }
+	 if (!hasOmen && Aimsharp.CanCast("Omen of Clarity", "player") && CatMode)
+    {
+        Aimsharp.Cast("OmenofClarity");
+        return true;
+    }
+
+    // Apply Thorns if it's not active
+    // if (!hasThorns && Aimsharp.CanCast("Thorns", "player"))
+    // {
+        // Aimsharp.Cast("Thornz");
+        // return true;
+    // }
+    if (Drinking || playerCasting != 0 || gcdRemaining > 0 || CatMode)
+        return false;
+	
+	ExecuteRotation();
+	CastHibernateOnMouseover();
+    CastEntanglingRootsOnMouseover();
+    SelfDispel();
+
+    // Apply Mark of the Wild if it's not active
+   
+
+    // Cast Regrowth if health is low
+    TimeSpan regrowthCooldown = TimeSpan.FromSeconds(12);
+    DateTime currentTime = DateTime.Now;
+    if (!isMoving && playerHealth < 40 && currentTime - lastRegrowthTime > regrowthCooldown && Aimsharp.CanCast("Regrowth", "player"))
+    {
+        Aimsharp.Cast("Regrowth");
+        lastRegrowthTime = currentTime;
+        return true;
+    }
+
+    // Out of combat pull with Moonfire
+    if (Aimsharp.CanCast("Moonfire", "target") && Aimsharp.Health("target") > 0 && Aimsharp.TargetIsEnemy() && !Aimsharp.HasDebuff("Moonfire", "target"))
+    {
+        Aimsharp.Cast("Moonfire");
+        return true;
+    }
+
+    return false;
+}
+}
+}
